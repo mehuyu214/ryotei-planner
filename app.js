@@ -5,7 +5,8 @@ const statusEl = $('#status');
 
 const PROFILE = { driving: 'driving', foot: 'foot', bike: 'bike' };
 const GMODE = { driving: 'driving', foot: 'walking', bike: 'bicycling', transit: 'transit' };
-const TRANSIT_API = 'https://ryotei-transit.netlify.app/route';
+const TRANSIT_API = 'https://ryotei-transit.onrender.com/route';
+const TRANSIT_API_FALLBACK = 'https://ryotei-transit.netlify.app/route'; // 旧中継（電車のみ・徒歩不可）
 const FALLBACK_SPEED = { driving: 40, foot: 4.8, bike: 14 }; // km/h
 
 const map = L.map('map').setView([35.681, 139.767], 11);
@@ -757,14 +758,22 @@ function epochOfJST(dateStr, minOfDay) {
 }
 async function fetchTransitLeg(fromName, toName, epoch, legMode) {
   const p = jstDateTime(epoch);
-  const url = TRANSIT_API + '?from=' + encodeURIComponent(fromName) + '&to=' + encodeURIComponent(toName) +
+  const qs = '?from=' + encodeURIComponent(fromName) + '&to=' + encodeURIComponent(toName) +
     '&date=' + p.date + '&time=' + p.time + '&mode=' + (legMode === 'walk' ? 'walk' : 'transit');
-  const res = await fetch(url);
-  const js = await res.json().catch(() => null);
-  if (!res.ok || !js || js.error || !js.routes || !js.routes.length || !js.routes[0].depEpoch) {
-    throw new Error(fromName + ' → ' + toName + ' の時刻を取得できませんでした' + (js && js.error ? '（' + js.error + '）' : '') + '。推定では埋めていません');
+  // 主中継（Render、無料枠はスリープ復帰で遅いことがある）→ 失敗時は旧中継（電車のみ）へ
+  const endpoints = legMode === 'walk' ? [TRANSIT_API] : [TRANSIT_API, TRANSIT_API_FALLBACK];
+  let lastErr = null;
+  for (const api of endpoints) {
+    try {
+      const res = await fetch(api + qs);
+      const js = await res.json().catch(() => null);
+      if (!res.ok || !js || js.error || !js.routes || !js.routes.length || !js.routes[0].depEpoch) {
+        throw new Error(js && js.error ? js.error : 'HTTP ' + res.status);
+      }
+      return js.routes[0];
+    } catch (e) { lastErr = e; }
   }
-  return js.routes[0];
+  throw new Error(fromName + ' → ' + toName + ' の時刻を取得できませんでした' + (lastErr ? '（' + lastErr.message + '）' : '') + '。推定では埋めていません');
 }
 const PAIR_CACHE_KEY = 'ryotei-pair-durations-v1';
 function pairCacheGet(key) {

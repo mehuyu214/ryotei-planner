@@ -3,6 +3,6 @@ services:
     name: ryotei-transit
     runtime: node
     plan: free
-    buildCommand: ""
+    buildCommand: "true"
     startCommand: node server/server.mjs
     autoDeploy: true
