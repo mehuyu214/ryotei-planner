@@ -272,7 +272,7 @@ async function calculate() {
 
 let lastResult = null;
 function renderResult(places, order, sim, legs, geometry, mode, roundTrip, startMin) {
-  lastResult = { places, order, sim, legs, mode, roundTrip, startMin };
+  lastResult = { places, order, sim, legs, mode, roundTrip, startMin, geometry };
   mapLayer.clearLayers();
   if (geometry && geometry.length > 1) {
     L.polyline(geometry, { color: '#6156c8', weight: 5, opacity: 0.85 }).addTo(mapLayer);
@@ -556,7 +556,7 @@ function renderTransit(places, order, stops, legs, roundTrip, endEpoch) {
     violation: stops.reduce((a, s) => a + s.violMin, 0),
     endTime: jstDateTime(endEpoch).mins
   };
-  lastResult = { places, order, sim: simLike, legs, mode: 'transit', roundTrip, startMin: jstDateTime(stops[0].depEpoch).mins };
+  lastResult = { places, order, sim: simLike, legs, mode: 'transit', roundTrip, startMin: jstDateTime(stops[0].depEpoch).mins, stopsRaw: stops, endEpoch };
   mapLayer.clearLayers();
   const pts = order.map(i => places[i]);
   const linePts = pts.map(p => [p.lat, p.lng]);
@@ -613,3 +613,117 @@ function renderTransit(places, order, stops, legs, roundTrip, endEpoch) {
   $('#totalDist').textContent = totalKm.toFixed(1) + 'km';
   $('#totalCost').textContent = '¥' + totalFare + (fareUnknown ? '＋不明分' : '');
 }
+
+/* ===== 旅程の保存（下書き自動保存＋名前付き保存、いずれもこのブラウザのlocalStorage） ===== */
+const DRAFT_KEY = 'ryotei-draft-v1';
+const SAVES_KEY = 'ryotei-saves-v1';
+function lsGet(key) { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : null; } catch (e) { return null; } }
+function lsSet(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); return true; } catch (e) { return false; } }
+function serializeForm() {
+  const rows = [...placeList.children];
+  return {
+    date: $('#tripDate').value, startTime: $('#startTime').value, mode: $('#mode').value,
+    nenpi: $('#nenpi').value, tanka: $('#tanka').value, roundTrip: $('#roundTrip').checked,
+    places: rows.map((row, i) => ({
+      name: row.querySelector('.place-name').value,
+      lat: row.dataset.lat ? parseFloat(row.dataset.lat) : null,
+      lng: row.dataset.lng ? parseFloat(row.dataset.lng) : null,
+      stay: i === 0 ? null : row.querySelector('.f-stay').value,
+      ws: i === 0 ? '' : row.querySelector('.f-ws').value,
+      we: i === 0 ? '' : row.querySelector('.f-we').value
+    }))
+  };
+}
+function applyFormState(state) {
+  if (!state) return;
+  if (state.date) $('#tripDate').value = state.date;
+  if (state.startTime) $('#startTime').value = state.startTime;
+  $('#mode').value = state.mode || 'driving';
+  $('#fuelRow').style.display = $('#mode').value === 'driving' ? '' : 'none';
+  $('#transitNote').hidden = $('#mode').value !== 'transit';
+  if (state.nenpi) $('#nenpi').value = state.nenpi;
+  if (state.tanka) $('#tanka').value = state.tanka;
+  $('#roundTrip').checked = !!state.roundTrip;
+  placeList.innerHTML = '';
+  (state.places || []).forEach(pl => {
+    addPlaceRow(pl.name || '', pl.stay === '' || pl.stay == null ? null : Number(pl.stay), pl.ws || null, pl.we || null);
+    const row = placeList.children[placeList.children.length - 1];
+    if (pl.lat != null && pl.lng != null) { row.dataset.lat = pl.lat; row.dataset.lng = pl.lng; }
+  });
+  if (!placeList.children.length) { addPlaceRow(); addPlaceRow(); }
+  renumber();
+  lastResult = null;
+}
+function saveDraft() { lsSet(DRAFT_KEY, serializeForm()); }
+function getSaves() { const s = lsGet(SAVES_KEY); return Array.isArray(s) ? s : []; }
+function refreshSavedList() {
+  const sel = $('#savedList');
+  const cur = sel.value;
+  sel.innerHTML = '';
+  const saves = getSaves();
+  if (!saves.length) { sel.innerHTML = '<option value="">（保存なし）</option>'; return; }
+  saves.forEach(sv => {
+    const opt = document.createElement('option');
+    opt.value = sv.name;
+    const d = new Date(sv.savedAt);
+    opt.textContent = sv.name + '（' + (d.getMonth() + 1) + '/' + d.getDate() + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + '）';
+    sel.appendChild(opt);
+  });
+  if (cur && saves.some(sv => sv.name === cur)) sel.value = cur;
+}
+$('#saveBtn').addEventListener('click', () => {
+  let name = $('#saveName').value.trim();
+  if (!name) {
+    const d = new Date();
+    name = '旅程 ' + (d.getMonth() + 1) + '/' + d.getDate() + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+  }
+  const entry = {
+    name, savedAt: new Date().toISOString(), form: serializeForm(),
+    result: lastResult ? JSON.parse(JSON.stringify(lastResult)) : null
+  };
+  let saves = getSaves().filter(sv => sv.name !== name);
+  saves.unshift(entry);
+  if (!lsSet(SAVES_KEY, saves)) {
+    // 容量不足時は地図の経路線を除いて再試行
+    if (entry.result) entry.result.geometry = null;
+    saves = getSaves().filter(sv => sv.name !== name);
+    saves.unshift(entry);
+    if (!lsSet(SAVES_KEY, saves)) { setStatus('保存できませんでした（ブラウザの保存容量不足）', true); return; }
+  }
+  refreshSavedList();
+  $('#savedList').value = name;
+  setStatus('「' + name + '」を保存しました' + (entry.result ? '（計算結果も含む）' : ''));
+});
+$('#loadSaveBtn').addEventListener('click', () => {
+  const name = $('#savedList').value;
+  const sv = getSaves().find(x => x.name === name);
+  if (!sv) { setStatus('読み込む旅程を選んでください', true); return; }
+  applyFormState(sv.form);
+  if (sv.result) {
+    const r = sv.result;
+    if (r.mode === 'transit' && r.stopsRaw) renderTransit(r.places, r.order, r.stopsRaw, r.legs, r.roundTrip, r.endEpoch);
+    else renderResult(r.places, r.order, r.sim, r.legs, r.geometry || null, r.mode, r.roundTrip, r.startMin);
+    setStatus('「' + name + '」を読み込みました（計算結果も復元）');
+  } else {
+    setStatus('「' + name + '」を読み込みました');
+  }
+  saveDraft();
+});
+$('#delSaveBtn').addEventListener('click', () => {
+  const name = $('#savedList').value;
+  if (!name) { setStatus('削除する旅程を選んでください', true); return; }
+  lsSet(SAVES_KEY, getSaves().filter(sv => sv.name !== name));
+  refreshSavedList();
+  setStatus('「' + name + '」を削除しました');
+});
+document.querySelector('.sidebar').addEventListener('input', saveDraft);
+document.querySelector('.sidebar').addEventListener('change', saveDraft);
+placeList.addEventListener('click', () => setTimeout(saveDraft, 0));
+(function restoreDraft() {
+  refreshSavedList();
+  const draft = lsGet(DRAFT_KEY);
+  if (draft && Array.isArray(draft.places) && draft.places.length) {
+    applyFormState(draft);
+    if (draft.places.some(p => p.name)) setStatus('前回の下書きを復元しました');
+  }
+})();

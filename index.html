@@ -28,6 +28,12 @@
 <div id="placeList" class="scroll-list"></div>
 <div class="calc-row"><button id="calcBtn" class="btn btn-primary calc-btn">最高効率の旅程を計算</button></div>
 <div id="status" class="status" role="status"></div>
+<div class="save-panel">
+<div class="panel-tools"><div class="panel-title">旅程の保存 <small>このブラウザに保存</small></div></div>
+<div class="save-row"><input id="saveName" type="text" placeholder="旅程の名前（例：明日のかながわ巡り）"><button id="saveBtn" class="btn btn-small btn-primary">保存</button></div>
+<div class="save-row"><select id="savedList"><option value="">（保存なし）</option></select><button id="loadSaveBtn" class="btn btn-small">読込</button><button id="delSaveBtn" class="btn btn-small btn-danger">削除</button></div>
+<p class="place-note">入力内容は自動で下書き保存され、再読み込みしても消えません。名前付き保存では計算結果も一緒に残せます。</p>
+</div>
 <div id="importBar" class="import-bar" hidden><label>読み込む日程<select id="importGroup"></select></label><button id="importApply" class="btn btn-small btn-primary">この日程を読み込む</button></div>
 <section class="result-section"><div class="panel-tools"><div class="panel-title">提案旅程 <small id="resultSummary"></small></div></div>
 <div id="resultList" class="scroll-list result-list"></div></section>
