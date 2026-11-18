@@ -12,15 +12,17 @@ function wallEpoch(date, time) {
   return Math.floor(Date.UTC(Y, M - 1, D, h, m) / 1000);
 }
 
+const MODE_CODE = { transit: '3', walk: '2', drive: '0', bike: '1' };
+
 const rootCache = new Map(); // 同一インスタンス内キャッシュ（10分）
-async function fetchPreviewRoot(from, to, date, time) {
-  const cacheKey = from + '|' + to + '|' + date + '|' + time;
+async function fetchPreviewRoot(from, to, date, time, mode) {
+  const cacheKey = from + '|' + to + '|' + date + '|' + time + '|' + mode;
   const hit = rootCache.get(cacheKey);
   if (hit && Date.now() - hit.at < 600000) return hit.root;
   let lastErr = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const root = await fetchPreviewRootOnce(from, to, date, time);
+      const root = await fetchPreviewRootOnce(from, to, date, time, mode);
       rootCache.set(cacheKey, { at: Date.now(), root });
       return root;
     } catch (e) {
@@ -32,11 +34,11 @@ async function fetchPreviewRoot(from, to, date, time) {
   throw lastErr;
 }
 
-async function fetchPreviewRootOnce(from, to, date, time) {
+async function fetchPreviewRootOnce(from, to, date, time, mode) {
   const ep = wallEpoch(date, time);
   const data = '!4m12!4m11!1m2!1m1!1s' + encodeURIComponent(from) +
     '!1m2!1m1!1s' + encodeURIComponent(to) +
-    '!2m3!6e0!7e2!8j' + ep + '!3e3';
+    '!2m3!6e0!7e2!8j' + ep + '!3e' + (MODE_CODE[mode] || '3');
   const pageUrl = 'https://www.google.com/maps/dir/' + encodeURIComponent(from) + '/' + encodeURIComponent(to) + '/data=' + data;
   const page = await fetch(pageUrl, { headers: { 'User-Agent': UA, 'Accept-Language': 'ja' } });
   if (!page.ok) throw new Error('page ' + page.status);
@@ -94,17 +96,25 @@ function extractPath(route) {
   return pts;
 }
 
-function parseRoutes(root) {
+function parseRoutes(root, fallbackDepEpoch) {
   const routes = root[0][1];
   return routes.slice(0, 3).map(r => {
     const s = r[0];
     const fareM = JSON.stringify(r).match(/\[(\d+),"\d[\d,]*円","JPY"\]/);
     const lines = [...new Set([...JSON.stringify(r).matchAll(/\[5,\["([^"]+)",1,"#[0-9a-f]{6}","#[0-9a-f]{6}"\]\]/g)].map(x => x[1]))];
+    const durSec = s[3] ? s[3][0] : null;
+    let depEpoch = s[5] && s[5][0] ? s[5][0][0] : null;
+    let arrEpoch = s[5] && s[5][1] ? s[5][1][0] : null;
+    // 徒歩など時刻配列がないモードは、指定出発時刻＋所要時間で補う
+    if (depEpoch == null && fallbackDepEpoch != null && durSec != null) {
+      depEpoch = fallbackDepEpoch;
+      arrEpoch = fallbackDepEpoch + durSec;
+    }
     return {
       distanceKm: s[2] ? s[2][0] / 1000 : null,
-      durationMin: s[3] ? Math.round(s[3][0] / 60) : null,
-      depEpoch: s[5] && s[5][0] ? s[5][0][0] : null,
-      arrEpoch: s[5] && s[5][1] ? s[5][1][0] : null,
+      durationMin: durSec != null ? Math.round(durSec / 60) : null,
+      depEpoch,
+      arrEpoch,
       dep: s[5] && s[5][0] ? s[5][0][2] : null,
       arr: s[5] && s[5][1] ? s[5][1][2] : null,
       fareYen: fareM ? parseInt(fareM[1], 10) : null,
@@ -131,7 +141,7 @@ export default async (req) => {
       const q = u.searchParams.get('q');
       if (!q) return Response.json({ error: 'missing q' }, { status: 400, headers: cors });
       const now = nowJST();
-      const root = await fetchPreviewRoot(q, '東京駅', now.date, now.time);
+      const root = await fetchPreviewRoot(q, '東京駅', now.date, now.time, 'transit');
       const places = parsePlaces(root);
       if (!places[0] || places[0].lat == null) return Response.json({ error: 'place not found' }, { status: 404, headers: cors });
       return Response.json({ place: places[0] }, { headers: cors });
@@ -139,9 +149,11 @@ export default async (req) => {
     if (u.pathname === '/route') {
       const from = u.searchParams.get('from'), to = u.searchParams.get('to');
       const date = u.searchParams.get('date'), time = u.searchParams.get('time');
+      const mode = MODE_CODE[u.searchParams.get('mode') || 'transit'] ? (u.searchParams.get('mode') || 'transit') : 'transit';
       if (!from || !to || !date || !time) return Response.json({ error: 'missing params' }, { status: 400, headers: cors });
-      const root = await fetchPreviewRoot(from, to, date, time);
-      return Response.json({ routes: parseRoutes(root), places: parsePlaces(root) }, { headers: cors });
+      const root = await fetchPreviewRoot(from, to, date, time, mode);
+      const fallbackDep = wallEpoch(date, time) - 32400; // 壁時計(JST)を実epochへ
+      return Response.json({ routes: parseRoutes(root, fallbackDep), places: parsePlaces(root), mode }, { headers: cors });
     }
     return new Response('not found', { status: 404, headers: cors });
   } catch (e) {

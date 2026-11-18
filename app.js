@@ -19,7 +19,7 @@ function setStatus(msg, isError) {
   statusEl.className = 'status' + (isError ? ' error' : '');
 }
 
-function addPlaceRow(name, stay, winStart, winEnd) {
+function addPlaceRow(name, stay, winStart, winEnd, legMode) {
   const idx = placeList.children.length;
   const row = document.createElement('div');
   row.className = 'place-row';
@@ -33,7 +33,8 @@ function addPlaceRow(name, stay, winStart, winEnd) {
     '<div class="place-fields">' +
     '<label>滞在時間（分）<input class="f-stay" type="number" min="0" step="5" value="60"></label>' +
     '<label>いたい日時から<input class="f-ws" type="datetime-local"></label>' +
-    '<label>いたい日時まで<input class="f-we" type="datetime-local"></label></div>' +
+    '<label>いたい日時まで<input class="f-we" type="datetime-local"></label>' +
+    '<label>ここへの移動（電車・バス・徒歩モード時）<select class="f-legmode"><option value="auto">おまかせ（速い方）</option><option value="transit">電車・バス</option><option value="walk">徒歩</option></select></label></div>' +
     '<div class="place-note">希望日時は空欄でもOK。その日時に滞在が収まるよう旅程を組みます。</div>') +
     '<div class="place-extra">' +
     '<label>分類<input class="f-cat" type="text" list="catList" placeholder="観光・食事・宿泊など"></label>' +
@@ -44,6 +45,7 @@ function addPlaceRow(name, stay, winStart, winEnd) {
     if (stay != null) row.querySelector('.f-stay').value = stay;
     if (winStart) row.querySelector('.f-ws').value = winStart;
     if (winEnd) row.querySelector('.f-we').value = winEnd;
+    if (legMode) row.querySelector('.f-legmode').value = legMode;
     row.querySelector('.row-del').addEventListener('click', () => { row.remove(); renumber(); });
   }
   placeList.appendChild(row);
@@ -330,7 +332,8 @@ function buildPlaces(rows) {
     let ws = dtAbsMin(rows[i].querySelector('.f-ws').value);
     let we = dtAbsMin(rows[i].querySelector('.f-we').value);
     if (ws != null && we != null && we <= ws) we = null; // 終了が開始以前なら「開始のみ」の希望として扱う
-    places.push({ name, cat, stay, winStart: ws, winEnd: we, ...(preset || {}) });
+    const legMode = rows[i].querySelector('.f-legmode') ? rows[i].querySelector('.f-legmode').value : 'auto';
+    places.push({ name, cat, stay, winStart: ws, winEnd: we, legMode, ...(preset || {}) });
   }
   if (places.length < 2) { setStatus('場所を2件以上入れてください', true); return null; }
   return places;
@@ -543,6 +546,7 @@ function loadPlacesIntoForm(list, firstTime) {
       row.querySelector('.f-stay').value = it.stay != null ? it.stay : 60;
       if (it.winStart) row.querySelector('.f-ws').value = it.winStart;
       if (it.winEnd) row.querySelector('.f-we').value = it.winEnd;
+      if (it.legMode) row.querySelector('.f-legmode').value = it.legMode;
     }
   });
   renumber();
@@ -605,7 +609,7 @@ function applyGroup(pointMap, group) {
     const isoDay = dayToISODate(ev.day);
     let ws = null, we = null;
     if (isoDay && t) { ws = isoDay + 'T' + t; we = addMinToDT(ws, stay); }
-    list.push({ name: p.name, lat: (typeof p.lat === 'number' ? p.lat : null), lng: (typeof p.lon === 'number' ? p.lon : null), address: p.address || '', cat: p.category || '', stay, winStart: ws, winEnd: we });
+    list.push({ name: p.name, lat: (typeof p.lat === 'number' ? p.lat : null), lng: (typeof p.lon === 'number' ? p.lon : null), address: p.address || '', cat: p.category || '', stay, winStart: ws, winEnd: we, legMode: ev.travelMode === 'walking' ? 'walk' : (ev.travelMode === 'transit' ? 'transit' : 'auto') });
   });
   if (list.length < 2) { setStatus('読み込める地点が2件未満でした。複数日の旅程は「全日程」でも読み込めます', true); return; }
   const isoDays = evs.map(ev => dayToISODate(ev.day)).filter(Boolean).sort();
@@ -713,7 +717,7 @@ $('#exportBtn').addEventListener('click', async () => {
       id: 'rp_ev_' + String(k + 1).padStart(4, '0'), tripId, plan: '最適化旅程', day: s.date,
       time: s.time, action: places[s.idx].name + 'を訪問', pointId: 'rp_p' + (k + 1),
       order: k, category: places[s.idx].cat || '観光', stayMinutes: places[s.idx].stay,
-      travelMode: k === 0 ? 'unspecified' : modeMap[mode],
+      travelMode: k === 0 ? 'unspecified' : (mode === 'transit' ? ((legs[k - 1] && legs[k - 1].mode === 'walk') ? 'walking' : 'transit') : modeMap[mode]),
       cost: k === 0 ? 0 : legCost(k - 1),
       confidence: '計画', source: srcText
     }))
@@ -723,7 +727,7 @@ $('#exportBtn').addEventListener('click', async () => {
       id: 'rp_ev_' + String(out.events.length + 1).padStart(4, '0'), tripId, plan: '最適化旅程', day: returnStop.date,
       time: returnStop.time, action: places[0].name + 'へ帰着', pointId: 'rp_p1',
       order: out.events.length, category: '交通', stayMinutes: 0,
-      travelMode: modeMap[mode], cost: legCost(legs.length - 1),
+      travelMode: mode === 'transit' ? ((legs[legs.length - 1] && legs[legs.length - 1].mode === 'walk') ? 'walking' : 'transit') : modeMap[mode], cost: legCost(legs.length - 1),
       confidence: '計画', source: srcText
     });
   }
@@ -751,14 +755,14 @@ function epochOfJST(dateStr, minOfDay) {
   const [Y, M, D] = dateStr.split('-').map(Number);
   return Math.floor(Date.UTC(Y, M - 1, D, 0, 0) / 1000) - 32400 + minOfDay * 60;
 }
-async function fetchTransitLeg(fromName, toName, epoch) {
+async function fetchTransitLeg(fromName, toName, epoch, legMode) {
   const p = jstDateTime(epoch);
   const url = TRANSIT_API + '?from=' + encodeURIComponent(fromName) + '&to=' + encodeURIComponent(toName) +
-    '&date=' + p.date + '&time=' + p.time;
+    '&date=' + p.date + '&time=' + p.time + '&mode=' + (legMode === 'walk' ? 'walk' : 'transit');
   const res = await fetch(url);
   const js = await res.json().catch(() => null);
   if (!res.ok || !js || js.error || !js.routes || !js.routes.length || !js.routes[0].depEpoch) {
-    throw new Error(fromName + ' → ' + toName + ' の電車時刻を取得できませんでした' + (js && js.error ? '（' + js.error + '）' : '') + '。推定では埋めていません');
+    throw new Error(fromName + ' → ' + toName + ' の時刻を取得できませんでした' + (js && js.error ? '（' + js.error + '）' : '') + '。推定では埋めていません');
   }
   return js.routes[0];
 }
@@ -789,25 +793,38 @@ async function calculateTransit(places, startMin, roundTrip) {
     catch (e) { dur = places.map(a => places.map(b => haversineKm(a, b) * 1.3 / FALLBACK_SPEED.driving * 60)); }
   } else {
     // 1) 全区間の所要時間をGoogleマップで取得する（出発時刻基準）
+    // 区間ごとの移動手段は「行き先の場所」の設定（おまかせ／電車・バス／徒歩）に従う。
+    // おまかせは電車・バスと徒歩の両方を取得し、速い方を採用する。
     // 地点が多いときは順序決定用に限って往復を共通化し、取得回数を半分にする（表示する発着時刻は実際に乗る方向で毎回実取得する）
     const mirror = n > 8;
+    const wantMode = (idx) => places[idx].legMode || 'auto';
     dur = Array.from({ length: n }, () => new Array(n).fill(0));
     let donePairs = 0;
-    const totalPairs = mirror ? n * (n - 1) / 2 : n * (n - 1);
+    const totalPairs = n * (n - 1);
     const refEpoch = epochOfJST(dateStr, startMin);
     for (let i = 0; i < n; i++) {
       for (let j = 0; j < n; j++) {
         if (i === j) continue;
-        if (mirror && j < i) { dur[i][j] = dur[j][i]; continue; }
+        // 往復共通化は、両方向の希望手段が同じ（おまかせ以外）のときだけ
+        if (mirror && j < i && wantMode(i) === wantMode(j) && wantMode(j) !== 'auto') { dur[i][j] = dur[j][i]; continue; }
         donePairs++;
         setStatus('Googleで全区間の所要時間を取得中… ' + donePairs + '/' + totalPairs + '（' + places[i].name + ' → ' + places[j].name + '）');
         const qi = places[i].query || places[i].name, qj = places[j].query || places[j].name;
-        const pairKey = (mirror ? [qi, qj].sort().join('|') : qi + '|' + qj) + '|' + dateStr + '|' + startMin;
+        const wm = wantMode(j);
+        const pairKey = qi + '|' + qj + '|' + dateStr + '|' + startMin + '|' + wm;
         const cachedMin = pairCacheGet(pairKey);
         if (cachedMin != null) { dur[i][j] = cachedMin; continue; }
         try {
-          const r = await fetchTransitLeg(qi, qj, refEpoch);
-          dur[i][j] = r.durationMin || 0;
+          if (wm === 'auto') {
+            let best = null;
+            try { const rt = await fetchTransitLeg(qi, qj, refEpoch, 'transit'); best = rt.durationMin || 0; } catch (e) { /* 徒歩で再試行 */ }
+            try { const rw = await fetchTransitLeg(qi, qj, refEpoch, 'walk'); const w = rw.durationMin || 0; if (best == null || w < best) best = w; } catch (e) { /* 電車のみ採用 */ }
+            if (best == null) throw new Error('no route');
+            dur[i][j] = best;
+          } else {
+            const r = await fetchTransitLeg(qi, qj, refEpoch, wm);
+            dur[i][j] = r.durationMin || 0;
+          }
           pairCacheSet(pairKey, dur[i][j]);
         } catch (e) { dur[i][j] = 100000; failedPairs++; }
         await sleep(350);
@@ -828,9 +845,24 @@ async function calculateTransit(places, startMin, roundTrip) {
     const curIdx = seq[k];
     setStatus('電車の時刻を調べています… ' + (k + 1) + '/' + seq.length + ' 区間目（' + places[prevIdx].name + ' → ' + places[curIdx].name + '）');
     if (k > 0) await sleep(700);
-    const r = await fetchTransitLeg(places[prevIdx].query || places[prevIdx].name, places[curIdx].query || places[curIdx].name, cursor);
+    const fromQ = places[prevIdx].query || places[prevIdx].name, toQ = places[curIdx].query || places[curIdx].name;
+    const want = places[curIdx].legMode || 'auto';
+    let r, legMode;
+    if (want === 'walk') {
+      r = await fetchTransitLeg(fromQ, toQ, cursor, 'walk'); legMode = 'walk';
+    } else if (want === 'transit') {
+      r = await fetchTransitLeg(fromQ, toQ, cursor, 'transit'); legMode = 'transit';
+    } else {
+      // おまかせ：電車・バスと徒歩を比べ、到着が早い方（同点なら電車・バス）
+      let rt = null, rw = null;
+      try { rt = await fetchTransitLeg(fromQ, toQ, cursor, 'transit'); } catch (e) { /* 徒歩で代替 */ }
+      try { rw = await fetchTransitLeg(fromQ, toQ, cursor, 'walk'); } catch (e) { /* 電車のみ */ }
+      if (!rt && !rw) throw new Error(fromQ + ' → ' + toQ + ' の時刻を取得できませんでした');
+      if (rt && rw) { if (rw.arrEpoch < rt.arrEpoch) { r = rw; legMode = 'walk'; } else { r = rt; legMode = 'transit'; } }
+      else if (rw) { r = rw; legMode = 'walk'; } else { r = rt; legMode = 'transit'; }
+    }
     const trainWait = Math.max(0, (r.depEpoch - cursor) / 60);
-    legs.push({ km: r.distanceKm || 0, min: r.durationMin || 0, fare: r.fareYen, lines: r.lines || [], depEpoch: r.depEpoch, arrEpoch: r.arrEpoch, path: r.path || [] });
+    legs.push({ km: r.distanceKm || 0, min: r.durationMin || 0, fare: legMode === 'walk' ? 0 : r.fareYen, lines: legMode === 'walk' ? [] : (r.lines || []), depEpoch: r.depEpoch, arrEpoch: r.arrEpoch, path: r.path || [], mode: legMode });
     const isReturnLeg = roundTrip && k === seq.length - 1 && curIdx === 0;
     if (isReturnLeg) {
       stops.push({ idx: 0, arrEpoch: r.arrEpoch, stayStartEpoch: r.arrEpoch, depEpoch: r.arrEpoch, waitMin: 0, violMin: 0, trainWaitMin: trainWait, isReturn: true });
@@ -870,7 +902,7 @@ function renderTransit(places, order, stops, legs, roundTrip, endEpoch) {
   legs.forEach(leg => { if (leg.path) leg.path.forEach(pt => allPts.push(pt)); });
   legs.forEach((leg, k) => {
     if (leg.path && leg.path.length > 1) {
-      L.polyline(leg.path, { color: '#6d28d9', weight: 5, opacity: 0.85 }).addTo(mapLayer);
+      L.polyline(leg.path, { color: leg.mode === 'walk' ? '#16a34a' : '#6d28d9', weight: 5, opacity: 0.85 }).addTo(mapLayer);
     } else {
       const a = places[stops[k].idx], b = places[stops[k + 1].idx];
       L.polyline([[a.lat, a.lng], [b.lat, b.lng]], { color: '#94a3b8', weight: 3, opacity: 0.6, dashArray: '3 7' }).addTo(mapLayer);
@@ -924,14 +956,15 @@ function renderTransit(places, order, stops, legs, roundTrip, endEpoch) {
       const from = places[s.idx], to = places[stops[k + 1].idx];
       const row = document.createElement('div');
       row.className = 'leg-row';
+      const isWalk = leg.mode === 'walk';
       row.innerHTML = '<span>' + hmD(leg.depEpoch) + '発 → ' + hmD(leg.arrEpoch) + '着 ・ ' +
-        (leg.lines.length ? escapeHtml(leg.lines.join('・')) + ' ・ ' : '') + fmtDur(leg.min) + ' ・ ' +
+        (isWalk ? '徒歩 ・ ' : (leg.lines.length ? escapeHtml(leg.lines.join('・')) + ' ・ ' : '')) + fmtDur(leg.min) + ' ・ ' +
         (leg.fare != null ? '¥' + leg.fare : '運賃不明') + '</span>' +
-        '<a target="_blank" rel="noopener" href="' + gmapsLink(from, to, 'transit') + '">Googleマップで開く</a>';
+        '<a target="_blank" rel="noopener" href="' + gmapsLink(from, to, isWalk ? 'foot' : 'transit') + '">Googleマップで開く</a>';
       list.appendChild(row);
     }
   });
-  $('#resultSummary').textContent = '乗車 ' + fmtDur(rideMin) + ' / 待ち ' + fmtDur(simLike.wait) +
+  $('#resultSummary').textContent = '移動 ' + fmtDur(rideMin) + ' / 待ち ' + fmtDur(simLike.wait) +
     (simLike.violation >= 0.5 ? ' / 希望ズレ合計 約' + Math.round(simLike.violation) + '分' : ' / 希望は全て達成');
   $('#pointCount').textContent = places.length;
   $('#totalDist').textContent = totalKm.toFixed(1) + 'km';
@@ -958,6 +991,7 @@ function serializeForm() {
       stay: i === 0 ? null : row.querySelector('.f-stay').value,
       ws: i === 0 ? '' : row.querySelector('.f-ws').value,
       we: i === 0 ? '' : row.querySelector('.f-we').value,
+      legmode: i === 0 ? 'auto' : (row.querySelector('.f-legmode') ? row.querySelector('.f-legmode').value : 'auto'),
       addr: row.querySelector('.f-addr') ? row.querySelector('.f-addr').value : '',
       coord: row.querySelector('.f-coord') ? row.querySelector('.f-coord').value : ''
     }))
@@ -976,7 +1010,7 @@ function applyFormState(state) {
   placeList.innerHTML = '';
   const fixDT = (v) => (v && /^\d{1,2}:\d{2}$/.test(v) && state.date) ? (state.date + 'T' + (v.length === 4 ? '0' + v : v)) : (v || null);
   (state.places || []).forEach(pl => {
-    addPlaceRow(pl.name || '', pl.stay === '' || pl.stay == null ? null : Number(pl.stay), fixDT(pl.ws), fixDT(pl.we));
+    addPlaceRow(pl.name || '', pl.stay === '' || pl.stay == null ? null : Number(pl.stay), fixDT(pl.ws), fixDT(pl.we), pl.legmode || 'auto');
     const row = placeList.children[placeList.children.length - 1];
     if (pl.lat != null && pl.lng != null) { row.dataset.lat = pl.lat; row.dataset.lng = pl.lng; }
     if (pl.cat) row.querySelector('.f-cat').value = pl.cat;
