@@ -120,8 +120,12 @@ async function googlePlace(q) {
   if (placeCache.has(q)) return placeCache.get(q);
   let out = null;
   try {
-    const res = await fetch(TRANSIT_API.replace(/\/route$/, '/place') + '?q=' + encodeURIComponent(q));
-    if (res.ok) { const j = await res.json(); if (j && j.place && j.place.lat != null) out = j.place; }
+    // /route の応答に含まれる地点情報（places）で解決する（to は固定の参照地点）
+    const now = new Date(Date.now() + 32400 * 1000);
+    const date = now.getUTCFullYear() + '-' + pad2(now.getUTCMonth() + 1) + '-' + pad2(now.getUTCDate());
+    const time = pad2(now.getUTCHours()) + ':' + pad2(now.getUTCMinutes());
+    const res = await fetch(TRANSIT_API + '?from=' + encodeURIComponent(q) + '&to=' + encodeURIComponent('東京駅') + '&date=' + date + '&time=' + time);
+    if (res.ok) { const j = await res.json(); if (j && j.places && j.places[0] && j.places[0].lat != null) out = j.places[0]; }
   } catch (e) { /* Googleで取れなければ次の手段へ */ }
   placeCache.set(q, out);
   await sleep(300);
