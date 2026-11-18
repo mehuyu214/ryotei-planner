@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: ryotei-transit
+    runtime: node
+    plan: free
+    buildCommand: ""
+    startCommand: node server/server.mjs
+    autoDeploy: true
