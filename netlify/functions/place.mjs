@@ -129,4 +129,4 @@ export default async (req) => {
   }
 };
 
-export const config = { path: '/route' };
+export const config = { path: '/place' };
