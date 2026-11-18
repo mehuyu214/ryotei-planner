@@ -646,7 +646,7 @@ $('#exportBtn').addEventListener('click', async () => {
   }
   const R = lastResult;
   const places = R.places, order = R.order, legs = R.legs;
-  const mode = R.kind === 'transit' ? 'transit' : R.mode;
+  const mode = (R.kind === 'transit' || R.mode === 'transit') ? 'transit' : R.mode;
   const tripId = 'route-planner';
   const modeMap = { driving: 'driving', foot: 'walking', bike: 'bicycling', transit: 'transit' };
   const srcText = mode === 'transit' ? 'Route Planner（Googleマップ実ダイヤによる提案）' : 'Route Planner（OSRM経路計算による提案）';
@@ -665,7 +665,7 @@ $('#exportBtn').addEventListener('click', async () => {
     return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate());
   };
   let stopsN = [], returnStop = null;
-  if (R.kind === 'transit') {
+  if (R.kind === 'transit' || R.mode === 'transit') {
     let seenFirst = false;
     R.stopsRaw.forEach(s => {
       if (s.isReturn) { const dt = jstDateTime(s.arrEpoch); returnStop = { idx: s.idx, date: dt.date, time: dt.time }; return; }
@@ -848,7 +848,7 @@ function renderTransit(places, order, stops, legs, roundTrip, endEpoch) {
     violation: stops.reduce((a, s) => a + s.violMin, 0),
     endTime: jstDateTime(endEpoch).mins
   };
-  lastResult = { places, order, sim: simLike, legs, mode: 'transit', roundTrip, startMin: jstDateTime(stops[0].depEpoch).mins, stopsRaw: stops, endEpoch };
+  lastResult = { kind: 'transit', places, order, sim: simLike, legs, mode: 'transit', roundTrip, startMin: jstDateTime(stops[0].depEpoch).mins, stopsRaw: stops, endEpoch };
   mapLayer.clearLayers();
   const allPts = order.map(i => [places[i].lat, places[i].lng]);
   legs.forEach(leg => { if (leg.path) leg.path.forEach(pt => allPts.push(pt)); });
