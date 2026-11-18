@@ -710,7 +710,7 @@ async function fetchTransitLeg(fromName, toName, epoch) {
 }
 const PAIR_CACHE_KEY = 'ryotei-pair-durations-v1';
 function pairCacheGet(key) {
-  try { const c = JSON.parse(localStorage.getItem(PAIR_CACHE_KEY) || '{}'); const e = c[key]; if (e && Date.now() - e.at < 3600000) return e.min; } catch (err) {}
+  try { const c = JSON.parse(localStorage.getItem(PAIR_CACHE_KEY) || '{}'); const e = c[key]; if (e && Date.now() - e.at < 86400000) return e.min; } catch (err) {}
   return null;
 }
 function pairCacheSet(key, min) {
@@ -735,20 +735,24 @@ async function calculateTransit(places, startMin, roundTrip) {
     catch (e) { dur = places.map(a => places.map(b => haversineKm(a, b) * 1.3 / FALLBACK_SPEED.driving * 60)); }
   } else {
     // 1) 全区間の所要時間をGoogleマップで取得する（出発時刻基準）
+    // 地点が多いときは順序決定用に限って往復を共通化し、取得回数を半分にする（表示する発着時刻は実際に乗る方向で毎回実取得する）
+    const mirror = n > 8;
     dur = Array.from({ length: n }, () => new Array(n).fill(0));
     let donePairs = 0;
-    const totalPairs = n * (n - 1);
+    const totalPairs = mirror ? n * (n - 1) / 2 : n * (n - 1);
     const refEpoch = epochOfJST(dateStr, startMin);
     for (let i = 0; i < n; i++) {
       for (let j = 0; j < n; j++) {
         if (i === j) continue;
+        if (mirror && j < i) { dur[i][j] = dur[j][i]; continue; }
         donePairs++;
         setStatus('Googleで全区間の所要時間を取得中… ' + donePairs + '/' + totalPairs + '（' + places[i].name + ' → ' + places[j].name + '）');
-        const pairKey = (places[i].query || places[i].name) + '|' + (places[j].query || places[j].name) + '|' + dateStr + '|' + startMin;
+        const qi = places[i].query || places[i].name, qj = places[j].query || places[j].name;
+        const pairKey = (mirror ? [qi, qj].sort().join('|') : qi + '|' + qj) + '|' + dateStr + '|' + startMin;
         const cachedMin = pairCacheGet(pairKey);
         if (cachedMin != null) { dur[i][j] = cachedMin; continue; }
         try {
-          const r = await fetchTransitLeg(places[i].query || places[i].name, places[j].query || places[j].name, refEpoch);
+          const r = await fetchTransitLeg(qi, qj, refEpoch);
           dur[i][j] = r.durationMin || 0;
           pairCacheSet(pairKey, dur[i][j]);
         } catch (e) { dur[i][j] = 100000; failedPairs++; }
