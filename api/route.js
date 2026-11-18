@@ -1,8 +1,6 @@
-// ryotei-transit (Vercel Edge版): Googleマップ経路データ取得（APIキー不要）
-// GET /api/route?from=大阪駅&to=神戸駅&date=2026-11-19&time=09:00
-// → { routes: [{ depEpoch, arrEpoch, dep, arr, durationMin, distanceKm, fareYen, lines }] }
+// ryotei-transit (Vercel Edge版): Googleマップ経路・地点データ取得（APIキー不要）
+// GET /api/route?from=大阪駅&to=神戸駅&date=2026-11-19&time=09:00 / GET /api/place?q=神戸駅
 export const config = { runtime: 'edge' };
-
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
 
 function wallEpoch(date, time) {
@@ -12,7 +10,7 @@ function wallEpoch(date, time) {
   return Math.floor(Date.UTC(Y, M - 1, D, h, m) / 1000);
 }
 
-async function fetchRoute(from, to, date, time) {
+async function fetchPreviewRoot(from, to, date, time) {
   const ep = wallEpoch(date, time);
   const data = '!4m12!4m11!1m2!1m1!1s' + encodeURIComponent(from) +
     '!1m2!1m1!1s' + encodeURIComponent(to) +
@@ -28,7 +26,53 @@ async function fetchRoute(from, to, date, time) {
     { headers: { 'User-Agent': UA, 'Accept-Language': 'ja' } });
   if (!pv.ok) throw new Error('preview ' + pv.status);
   const txt = (await pv.text()).replace(/^\)\]\}'\n?/, '');
-  const root = JSON.parse(txt);
+  return JSON.parse(txt);
+}
+
+function parsePlaces(root) {
+  const out = [];
+  const blocks = (root[0] && root[0][0]) || [];
+  for (const b of blocks) {
+    try {
+      const head = b[0][0];
+      const names = b[0][1];
+      const coord = head[2];
+      out.push({ name: names[1] || '', address: names[2] || '', lat: coord[2], lng: coord[3] });
+    } catch (e) { out.push(null); }
+  }
+  return out;
+}
+
+function quad(q) {
+  return Array.isArray(q) && typeof q[2] === 'number' && typeof q[3] === 'number' ? [q[2], q[3]] : null;
+}
+
+// 経路上の停車駅・地点の座標列（Googleの応答に含まれる実地点をつないだもの）
+function extractPath(route) {
+  const pts = [];
+  try {
+    const segs = route[1] && route[1][0] && route[1][0][1];
+    if (Array.isArray(segs)) {
+      for (const seg of segs) {
+        const st = seg && seg[5];
+        if (!Array.isArray(st)) continue;
+        const cand = [];
+        if (st[0]) cand.push(st[0][4]);
+        if (Array.isArray(st[7])) for (const x of st[7]) cand.push(x && x[4]);
+        if (st[1]) cand.push(st[1][4]);
+        for (const c of cand) {
+          const p = quad(c);
+          if (!p) continue;
+          const last = pts[pts.length - 1];
+          if (!last || last[0] !== p[0] || last[1] !== p[1]) pts.push(p);
+        }
+      }
+    }
+  } catch (e) { /* pathなしで返す */ }
+  return pts;
+}
+
+function parseRoutes(root) {
   const routes = root[0][1];
   return routes.slice(0, 3).map(r => {
     const s = r[0];
@@ -42,21 +86,45 @@ async function fetchRoute(from, to, date, time) {
       dep: s[5] && s[5][0] ? s[5][0][2] : null,
       arr: s[5] && s[5][1] ? s[5][1][2] : null,
       fareYen: fareM ? parseInt(fareM[1], 10) : null,
-      lines
+      lines,
+      path: extractPath(r)
     };
   });
 }
 
-export default async function handler(req) {
+function nowJST() {
+  const d = new Date(Date.now() + 32400 * 1000);
+  const p = n => String(n).padStart(2, '0');
+  return {
+    date: d.getUTCFullYear() + '-' + p(d.getUTCMonth() + 1) + '-' + p(d.getUTCDate()),
+    time: p(d.getUTCHours()) + ':' + p(d.getUTCMinutes())
+  };
+}
+
+async function handle(req) {
   const u = new URL(req.url);
   const cors = { 'Access-Control-Allow-Origin': '*' };
-  const from = u.searchParams.get('from'), to = u.searchParams.get('to');
-  const date = u.searchParams.get('date'), time = u.searchParams.get('time');
-  if (!from || !to || !date || !time) return Response.json({ error: 'missing params' }, { status: 400, headers: cors });
   try {
-    const routes = await fetchRoute(from, to, date, time);
-    return Response.json({ routes }, { headers: cors });
+    if (u.pathname === '/place') {
+      const q = u.searchParams.get('q');
+      if (!q) return Response.json({ error: 'missing q' }, { status: 400, headers: cors });
+      const now = nowJST();
+      const root = await fetchPreviewRoot(q, '東京駅', now.date, now.time);
+      const places = parsePlaces(root);
+      if (!places[0] || places[0].lat == null) return Response.json({ error: 'place not found' }, { status: 404, headers: cors });
+      return Response.json({ place: places[0] }, { headers: cors });
+    }
+    if (u.pathname === '/route' || u.pathname === '/api/route') {
+      const from = u.searchParams.get('from'), to = u.searchParams.get('to');
+      const date = u.searchParams.get('date'), time = u.searchParams.get('time');
+      if (!from || !to || !date || !time) return Response.json({ error: 'missing params' }, { status: 400, headers: cors });
+      const root = await fetchPreviewRoot(from, to, date, time);
+      return Response.json({ routes: parseRoutes(root), places: parsePlaces(root) }, { headers: cors });
+    }
+    return new Response('not found', { status: 404, headers: cors });
   } catch (e) {
     return Response.json({ error: String((e && e.message) || e) }, { status: 502, headers: cors });
   }
 }
+
+export default handle;
