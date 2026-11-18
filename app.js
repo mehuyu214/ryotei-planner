@@ -572,13 +572,27 @@ function buildGroups(data) {
   (data.events || []).forEach(ev => {
     if (!ev || ev.pointId == null || !pointMap.has(String(ev.pointId))) return;
     const key = (ev.plan || '（旅程名なし）') + '|' + (ev.day || '（日付なし）');
-    if (!groups.has(key)) groups.set(key, { label: (ev.plan || '（旅程名なし）') + ' / ' + (ev.day || '（日付なし）'), events: [] });
+    if (!groups.has(key)) groups.set(key, { label: (ev.plan || '（旅程名なし）') + ' / ' + (ev.day || '（日付なし）'), plan: ev.plan || '（旅程名なし）', events: [] });
     groups.get(key).events.push(ev);
   });
+  // プランが複数日にまたがる場合は、まとめて読み込める「全日程」も用意する
+  const byPlan = new Map();
+  groups.forEach(g => { if (!byPlan.has(g.plan)) byPlan.set(g.plan, []); byPlan.get(g.plan).push(g); });
+  const merged = [];
+  byPlan.forEach((gs, plan) => {
+    if (gs.length > 1) merged.push(['all|' + plan, { label: plan + ' / 全日程（' + gs.length + '日間）', plan, events: gs.flatMap(g => g.events) }]);
+  });
+  if (merged.length) {
+    const rest = [...groups.entries()];
+    groups.clear();
+    merged.forEach(([k, v]) => groups.set(k, v));
+    rest.forEach(([k, v]) => groups.set(k, v));
+  }
   return { pointMap, groups };
 }
 function applyGroup(pointMap, group) {
   const evs = group.events.slice().sort((a, b) =>
+    String(a.day || '').localeCompare(String(b.day || '')) ||
     (String(a.time || '')).localeCompare(String(b.time || '')) || ((a.order || 0) - (b.order || 0)));
   const seen = new Set(); const list = [];
   evs.forEach(ev => {
@@ -593,7 +607,9 @@ function applyGroup(pointMap, group) {
     if (isoDay && t) { ws = isoDay + 'T' + t; we = addMinToDT(ws, stay); }
     list.push({ name: p.name, lat: (typeof p.lat === 'number' ? p.lat : null), lng: (typeof p.lon === 'number' ? p.lon : null), address: p.address || '', cat: p.category || '', stay, winStart: ws, winEnd: we });
   });
-  if (list.length < 2) { setStatus('読み込める地点が2件未満でした', true); return; }
+  if (list.length < 2) { setStatus('読み込める地点が2件未満でした。複数日の旅程は「全日程」でも読み込めます', true); return; }
+  const isoDays = evs.map(ev => dayToISODate(ev.day)).filter(Boolean).sort();
+  if (isoDays.length) $('#tripDate').value = isoDays[0];
   loadPlacesIntoForm(list, evs.length && evs[0].time ? evs[0].time : null);
   setStatus('「' + group.label + '」から ' + list.length + ' 件の場所を読み込みました。条件を直して計算できます');
 }
