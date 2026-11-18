@@ -2,7 +2,7 @@
 const $ = (s) => document.querySelector(s);
 const placeList = $('#placeList');
 const statusEl = $('#status');
-const MAX_PLACES = 40;
+
 const PROFILE = { driving: 'driving', foot: 'foot', bike: 'bike' };
 const GMODE = { driving: 'driving', foot: 'walking', bike: 'bicycling', transit: 'transit' };
 const TRANSIT_API = 'https://ryotei-transit.netlify.app/route';
@@ -21,7 +21,6 @@ function setStatus(msg, isError) {
 
 function addPlaceRow(name, stay, winStart, winEnd) {
   const idx = placeList.children.length;
-  if (idx >= MAX_PLACES) { setStatus('場所は最大' + MAX_PLACES + '件までです', true); return; }
   const row = document.createElement('div');
   row.className = 'place-row';
   const isStart = idx === 0;
@@ -555,7 +554,6 @@ function applyGroup(pointMap, group) {
     list.push({ name: p.name, lat: (typeof p.lat === 'number' ? p.lat : null), lng: (typeof p.lon === 'number' ? p.lon : null), address: p.address || '', cat: p.category || '', stay, winStart: ws, winEnd: we });
   });
   if (list.length < 2) { setStatus('読み込める地点が2件未満でした', true); return; }
-  if (list.length > MAX_PLACES) list.length = MAX_PLACES;
   loadPlacesIntoForm(list, evs.length && evs[0].time ? evs[0].time : null);
   setStatus('「' + group.label + '」から ' + list.length + ' 件の場所を読み込みました。条件を直して計算できます');
 }
@@ -576,7 +574,6 @@ $('#importFile').addEventListener('change', async (e) => {
   if (!pointMap.size) { setStatus('地点（points）が見つかりませんでした', true); return; }
   if (!groups.size) {
     const list = [...pointMap.values()].map(p => ({ name: p.name, lat: (typeof p.lat === 'number' ? p.lat : null), lng: (typeof p.lon === 'number' ? p.lon : null), stay: 60, winStart: null, winEnd: null }));
-    if (list.length > MAX_PLACES) list.length = MAX_PLACES;
     loadPlacesIntoForm(list, null);
     setStatus('地点 ' + list.length + ' 件を読み込みました（予定なし）');
     return;
