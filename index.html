@@ -16,7 +16,7 @@
 <label>出発時刻<input id="startTime" type="time" value="09:00"></label>
 <label>移動手段<select id="mode"><option value="driving">車</option><option value="foot">徒歩</option><option value="bike">自転車</option><option value="transit">電車（Google実ダイヤ）</option></select></label>
 </div>
-<p class="place-note" id="transitNote" hidden>電車モードでは、Googleマップの実ダイヤ（発着時刻・運賃・路線名）を区間ごとに取得します。回る順序の最適化は目安の移動時間で行い、表示する時刻と運賃はすべて実データです。取得できなかった区間は推定で埋めず、エラーとして知らせます。</p>
+<p class="place-note" id="transitNote" hidden>電車モードでは、全ての区間の所要時間をGoogleマップで取得し、全通りの並び順を探索します。表示する発着時刻・運賃・路線名はすべてGoogleの実データです。地図の線は経路上の駅・地点を結んだものです。取得できなかった区間は推定で埋めず、順序決定で強く不利に扱います。</p>
 <div class="filters" id="fuelRow">
 <label>燃費 (km/L)<input id="nenpi" type="number" value="12" min="1" step="0.1"></label>
 <label>ガソリン単価 (円/L)<input id="tanka" type="number" value="170" min="0" step="1"></label>

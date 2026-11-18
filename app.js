@@ -28,13 +28,17 @@ function addPlaceRow(name, stay, winStart, winEnd) {
   row.innerHTML =
     '<div class="row-head"><span class="place-num' + (isStart ? ' start' : '') + '">' + (idx + 1) + '</span>' +
     '<input class="place-name" type="text" placeholder="' + (isStart ? '出発地（例：自宅・駅・ホテル）' : '場所名（例：東京タワー）') + '" value="">' +
+    '<button class="btn btn-small gsearch-btn" type="button">Googleで検索</button>' +
     (isStart ? '' : '<button class="btn btn-small btn-danger row-del" type="button">削除</button>') + '</div>' +
     (isStart ? '<div class="place-note">出発地です。出発時刻にここを出ます。</div>' :
     '<div class="place-fields">' +
     '<label>滞在時間（分）<input class="f-stay" type="number" min="0" step="5" value="60"></label>' +
     '<label>いたい時間から<input class="f-ws" type="time"></label>' +
     '<label>いたい時間まで<input class="f-we" type="time"></label></div>' +
-    '<div class="place-note">希望時間帯は空欄でもOK。その時間帯に滞在が収まるよう旅程を組みます。</div>');
+    '<div class="place-note">希望時間帯は空欄でもOK。その時間帯に滞在が収まるよう旅程を組みます。</div>') +
+    '<div class="place-extra">' +
+    '<label>住所・補足（見つからない時）<input class="f-addr" type="text" placeholder="住所や正式名称"></label>' +
+    '<label>座標（緯度,経度）<input class="f-coord" type="text" placeholder="例：34.6795,135.1783"></label></div>';
   if (name) row.querySelector('.place-name').value = name;
   if (!isStart) {
     if (stay != null) row.querySelector('.f-stay').value = stay;
@@ -52,6 +56,12 @@ function renumber() {
   });
 }
 $('#addPlaceBtn').addEventListener('click', () => addPlaceRow());
+placeList.addEventListener('click', e => {
+  const gs = e.target.closest('.gsearch-btn');
+  if (!gs) return;
+  const nm = gs.closest('.place-row').querySelector('.place-name').value.trim();
+  if (nm) window.open('https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(nm), '_blank', 'noopener');
+});
 $('#mode').addEventListener('change', () => {
   $('#fuelRow').style.display = $('#mode').value === 'driving' ? '' : 'none';
   $('#transitNote').hidden = $('#mode').value !== 'transit';
@@ -103,6 +113,45 @@ async function osrmRoute(profile, pts) {
   const js = await res.json();
   if (js.code !== 'Ok' || !js.routes || !js.routes.length) throw new Error('route');
   return js.routes[0];
+}
+
+const placeCache = new Map();
+async function googlePlace(q) {
+  if (placeCache.has(q)) return placeCache.get(q);
+  let out = null;
+  try {
+    const res = await fetch(TRANSIT_API.replace(/\/route$/, '/place') + '?q=' + encodeURIComponent(q));
+    if (res.ok) { const j = await res.json(); if (j && j.place && j.place.lat != null) out = j.place; }
+  } catch (e) { /* Googleで取れなければ次の手段へ */ }
+  placeCache.set(q, out);
+  await sleep(300);
+  return out;
+}
+// 場所の特定：座標欄 → 取込済み座標 → Google検索 → OSM検索 の順で解決する
+async function resolvePlaces(places, rows) {
+  for (let i = 0; i < places.length; i++) {
+    const p = places[i], row = rows[i];
+    const addr = row.querySelector('.f-addr').value.trim();
+    const coordTxt = row.querySelector('.f-coord').value.trim();
+    const cm = coordTxt.match(/(-?\d{1,3}\.\d+)\s*[,、]\s*(-?\d{1,3}\.\d+)/);
+    if (cm) {
+      p.lat = parseFloat(cm[1]); p.lng = parseFloat(cm[2]);
+      p.query = p.lat + ',' + p.lng; p.address = addr || '';
+      continue;
+    }
+    if (p.lat != null && p.lng != null) { // 取込済みの座標
+      p.query = addr ? (p.name + ' ' + addr) : p.name;
+      p.address = addr || '';
+      continue;
+    }
+    setStatus('場所をGoogleで検索中… ' + (i + 1) + '/' + places.length + '：' + p.name);
+    const q = addr ? (p.name + ' ' + addr) : p.name;
+    const gp = await googlePlace(q);
+    if (gp) { p.lat = gp.lat; p.lng = gp.lng; p.address = gp.address || addr || ''; p.query = gp.name || q; continue; }
+    const g = await geocode(q);
+    if (g) { p.lat = g.lat; p.lng = g.lng; p.query = q; p.address = addr || ''; continue; }
+    throw new Error('場所が見つかりませんでした：「' + p.name + '」。行の「Googleで検索」ボタンで正式名称や住所を確認し、住所・補足欄に住所を書くか、座標欄に「緯度,経度」を入力してください。');
+  }
 }
 
 // Simulate a visiting order. order = array of place indices, order[0] is the start (fixed).
@@ -180,6 +229,31 @@ function optimize(places, dur, startMin, roundTrip) {
   return { order, sim: bestSim };
 }
 
+// 全通り探索（回る場所が9件以下のとき）。それ以上は近似探索（optimize）に切り替える。
+function bestOrder(places, dur, startMin, roundTrip) {
+  const idx = [];
+  for (let i = 1; i < places.length; i++) idx.push(i);
+  if (idx.length > 9) return optimize(places, dur, startMin, roundTrip);
+  let best = null;
+  const perm = idx.slice();
+  const evalPerm = () => {
+    const order = [0, ...perm];
+    const sim = simulate(order, dur, places, startMin, roundTrip);
+    if (!best || sim.score < best.sim.score) best = { order, sim };
+  };
+  evalPerm();
+  const c = new Array(perm.length).fill(0);
+  let i = 0;
+  while (i < perm.length) {
+    if (c[i] < i) {
+      const j = i % 2 === 0 ? 0 : c[i];
+      const tmp = perm[j]; perm[j] = perm[i]; perm[i] = tmp;
+      evalPerm(); c[i]++; i = 0;
+    } else { c[i] = 0; i++; }
+  }
+  return best;
+}
+
 function legCostYen(km, mode, leg) {
   if (mode === 'transit') return leg && leg.fare ? leg.fare : 0;
   if (mode !== 'driving') return 0;
@@ -214,18 +288,13 @@ async function calculate() {
   const roundTrip = $('#roundTrip').checked;
   btn.disabled = true;
   try {
-    // 1) Geocode
-    for (let i = 0; i < places.length; i++) {
-      if (places[i].lat != null && places[i].lng != null) continue; // imported coords
-      setStatus('場所を検索中… ' + (i + 1) + '/' + places.length + '：' + places[i].name);
-      const g = await geocode(places[i].name);
-      if (!g) { setStatus('場所が見つかりませんでした：' + places[i].name + '（市区町村名を足すなど、書き方を変えてみてください）', true); return; }
-      places[i].lat = g.lat; places[i].lng = g.lng;
-      if (i < places.length - 1) await sleep(350);
-    }
+    // 1) 場所の特定（座標欄 → 取込済み座標 → Google検索 → OSM検索）
+    await resolvePlaces(places, rows);
     if (mode === 'transit') {
-      await calculateTransit(places, startMin, roundTrip);
-      setStatus('計算できました（Googleマップの実ダイヤ・運賃）');
+      const failedPairs = await calculateTransit(places, startMin, roundTrip);
+      setStatus(failedPairs
+        ? '計算できました（一部 ' + failedPairs + ' 区間はGoogleで経路が見つからず、順序決定で強く不利に扱いました）'
+        : '計算できました（全区間Google実データ・全通り探索）', failedPairs > 0);
       return;
     }
     // 2) Duration matrix
@@ -238,7 +307,7 @@ async function calculate() {
     }
     // 3) Optimize order + schedule
     setStatus('最高効率の旅程を組んでいます…');
-    const { order } = optimize(places, dur, startMin, roundTrip);
+    const { order } = bestOrder(places, dur, startMin, roundTrip);
     // 4) Real route geometry + leg data
     const orderedPts = order.map(i => places[i]);
     const routePts = roundTrip ? orderedPts.concat([places[0]]) : orderedPts;
@@ -307,6 +376,7 @@ function renderResult(places, order, sim, legs, geometry, mode, roundTrip, start
       }
       html += '<div class="stop-meta">' + meta + '</div>';
     }
+    if (p.address) html += '<div class="stop-meta">' + escapeHtml(p.address) + '</div>';
     card.innerHTML = html;
     list.appendChild(card);
     if (k < legs.length) {
@@ -352,6 +422,8 @@ function loadPlacesIntoForm(list, firstTime) {
     const row = placeList.children[i];
     row.querySelector('.place-name').value = it.name;
     if (it.lat != null && it.lng != null) { row.dataset.lat = it.lat; row.dataset.lng = it.lng; }
+    if (it.address) row.querySelector('.f-addr').value = it.address;
+    if (it.lat != null && it.lng != null) row.querySelector('.f-coord').value = it.lat + ',' + it.lng;
     if (i > 0) {
       row.querySelector('.f-stay').value = it.stay != null ? it.stay : 60;
       if (it.winStart) row.querySelector('.f-ws').value = it.winStart;
@@ -388,7 +460,7 @@ function applyGroup(pointMap, group) {
       stay = ev.stayMinutes;
       if (t) { const end = timeToMin(t) + stay; if (end < 1440) we = fmtHHMM(end); }
     }
-    list.push({ name: p.name, lat: (typeof p.lat === 'number' ? p.lat : null), lng: (typeof p.lon === 'number' ? p.lon : null), stay, winStart: ws, winEnd: we });
+    list.push({ name: p.name, lat: (typeof p.lat === 'number' ? p.lat : null), lng: (typeof p.lon === 'number' ? p.lon : null), address: p.address || '', stay, winStart: ws, winEnd: we });
   });
   if (list.length < 2) { setStatus('読み込める地点が2件未満でした', true); return; }
   if (list.length > MAX_PLACES) list.length = MAX_PLACES;
@@ -509,11 +581,27 @@ async function fetchTransitLeg(fromName, toName, epoch) {
 }
 async function calculateTransit(places, startMin, roundTrip) {
   const dateStr = $('#tripDate').value || jstDateTime(Math.floor(Date.now() / 1000)).date;
-  setStatus('回る順序を決めています…');
-  let dur;
-  try { dur = await osrmTable('driving', places); }
-  catch (e) { dur = places.map(a => places.map(b => haversineKm(a, b) * 1.3 / FALLBACK_SPEED.driving * 60)); }
-  const { order } = optimize(places, dur, startMin, roundTrip);
+  const n = places.length;
+  // 1) 全区間の所要時間をGoogleマップで取得する（出発時刻基準）
+  const dur = Array.from({ length: n }, () => new Array(n).fill(0));
+  let donePairs = 0, failedPairs = 0;
+  const totalPairs = n * (n - 1);
+  const refEpoch = epochOfJST(dateStr, startMin);
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue;
+      donePairs++;
+      setStatus('Googleで全区間の所要時間を取得中… ' + donePairs + '/' + totalPairs + '（' + places[i].name + ' → ' + places[j].name + '）');
+      try {
+        const r = await fetchTransitLeg(places[i].query || places[i].name, places[j].query || places[j].name, refEpoch);
+        dur[i][j] = r.durationMin || 0;
+      } catch (e) { dur[i][j] = 100000; failedPairs++; }
+      await sleep(350);
+    }
+  }
+  // 2) 全通り探索で回る順序を決める
+  setStatus('全通りの並び順を探索しています…');
+  const { order } = bestOrder(places, dur, startMin, roundTrip);
   const day0 = epochOfJST(dateStr, 0);
   let cursor = day0 + startMin * 60;
   const stops = [{ idx: order[0], arrEpoch: cursor, stayStartEpoch: cursor, depEpoch: cursor, waitMin: 0, violMin: 0, trainWaitMin: 0 }];
@@ -525,9 +613,9 @@ async function calculateTransit(places, startMin, roundTrip) {
     const curIdx = seq[k];
     setStatus('電車の時刻を調べています… ' + (k + 1) + '/' + seq.length + ' 区間目（' + places[prevIdx].name + ' → ' + places[curIdx].name + '）');
     if (k > 0) await sleep(700);
-    const r = await fetchTransitLeg(places[prevIdx].name, places[curIdx].name, cursor);
+    const r = await fetchTransitLeg(places[prevIdx].query || places[prevIdx].name, places[curIdx].query || places[curIdx].name, cursor);
     const trainWait = Math.max(0, (r.depEpoch - cursor) / 60);
-    legs.push({ km: r.distanceKm || 0, min: r.durationMin || 0, fare: r.fareYen, lines: r.lines || [], depEpoch: r.depEpoch, arrEpoch: r.arrEpoch });
+    legs.push({ km: r.distanceKm || 0, min: r.durationMin || 0, fare: r.fareYen, lines: r.lines || [], depEpoch: r.depEpoch, arrEpoch: r.arrEpoch, path: r.path || [] });
     const isReturnLeg = roundTrip && k === seq.length - 1 && curIdx === 0;
     if (isReturnLeg) {
       stops.push({ idx: 0, arrEpoch: r.arrEpoch, stayStartEpoch: r.arrEpoch, depEpoch: r.arrEpoch, waitMin: 0, violMin: 0, trainWaitMin: trainWait, isReturn: true });
@@ -548,6 +636,7 @@ async function calculateTransit(places, startMin, roundTrip) {
     prevIdx = curIdx;
   }
   renderTransit(places, order, stops, legs, roundTrip, cursor);
+  return failedPairs;
 }
 function renderTransit(places, order, stops, legs, roundTrip, endEpoch) {
   const simLike = {
@@ -558,16 +647,22 @@ function renderTransit(places, order, stops, legs, roundTrip, endEpoch) {
   };
   lastResult = { places, order, sim: simLike, legs, mode: 'transit', roundTrip, startMin: jstDateTime(stops[0].depEpoch).mins, stopsRaw: stops, endEpoch };
   mapLayer.clearLayers();
-  const pts = order.map(i => places[i]);
-  const linePts = pts.map(p => [p.lat, p.lng]);
-  if (roundTrip && pts.length) linePts.push([pts[0].lat, pts[0].lng]);
-  if (linePts.length > 1) L.polyline(linePts, { color: '#6156c8', weight: 4, opacity: 0.7, dashArray: '8 8' }).addTo(mapLayer);
+  const allPts = order.map(i => [places[i].lat, places[i].lng]);
+  legs.forEach(leg => { if (leg.path) leg.path.forEach(pt => allPts.push(pt)); });
+  legs.forEach((leg, k) => {
+    if (leg.path && leg.path.length > 1) {
+      L.polyline(leg.path, { color: '#6d28d9', weight: 5, opacity: 0.85 }).addTo(mapLayer);
+    } else {
+      const a = places[stops[k].idx], b = places[stops[k + 1].idx];
+      L.polyline([[a.lat, a.lng], [b.lat, b.lng]], { color: '#94a3b8', weight: 3, opacity: 0.6, dashArray: '3 7' }).addTo(mapLayer);
+    }
+  });
   order.forEach((pi, k) => {
     const p = places[pi];
     const icon = L.divIcon({ className: '', html: '<div class="num-marker' + (k === 0 ? ' start' : '') + '">' + (k + 1) + '</div>', iconSize: [28, 28], iconAnchor: [14, 14] });
     L.marker([p.lat, p.lng], { icon }).addTo(mapLayer).bindPopup('<b>' + (k + 1) + '. ' + escapeHtml(p.name) + '</b>');
   });
-  if (linePts.length) map.fitBounds(L.latLngBounds(linePts), { padding: [30, 30] });
+  if (allPts.length) map.fitBounds(L.latLngBounds(allPts), { padding: [30, 30] });
   const list = $('#resultList');
   list.innerHTML = '';
   let totalKm = 0, totalFare = 0, fareUnknown = false, rideMin = 0;
@@ -593,6 +688,7 @@ function renderTransit(places, order, stops, legs, roundTrip, endEpoch) {
       }
       html += '<div class="stop-meta">' + meta + '</div>';
     }
+    if (p.address) html += '<div class="stop-meta">' + escapeHtml(p.address) + '</div>';
     card.innerHTML = html;
     list.appendChild(card);
     if (k < legs.length) {
@@ -630,7 +726,9 @@ function serializeForm() {
       lng: row.dataset.lng ? parseFloat(row.dataset.lng) : null,
       stay: i === 0 ? null : row.querySelector('.f-stay').value,
       ws: i === 0 ? '' : row.querySelector('.f-ws').value,
-      we: i === 0 ? '' : row.querySelector('.f-we').value
+      we: i === 0 ? '' : row.querySelector('.f-we').value,
+      addr: row.querySelector('.f-addr') ? row.querySelector('.f-addr').value : '',
+      coord: row.querySelector('.f-coord') ? row.querySelector('.f-coord').value : ''
     }))
   };
 }
@@ -649,6 +747,8 @@ function applyFormState(state) {
     addPlaceRow(pl.name || '', pl.stay === '' || pl.stay == null ? null : Number(pl.stay), pl.ws || null, pl.we || null);
     const row = placeList.children[placeList.children.length - 1];
     if (pl.lat != null && pl.lng != null) { row.dataset.lat = pl.lat; row.dataset.lng = pl.lng; }
+    if (pl.addr) row.querySelector('.f-addr').value = pl.addr;
+    if (pl.coord) row.querySelector('.f-coord').value = pl.coord;
   });
   if (!placeList.children.length) { addPlaceRow(); addPlaceRow(); }
   renumber();
