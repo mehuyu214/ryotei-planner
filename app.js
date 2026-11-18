@@ -109,6 +109,28 @@ function catColor(cat) { return CAT_COLORS[(cat || '').trim()] || '#6254ba'; }
 function markerHtml(num, cat, isStart) {
   return '<div class="num-marker' + (isStart ? ' start' : '') + '" style="background:' + catColor(cat) + '">' + num + '</div>';
 }
+const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
+function dayLabel(dayOffset) {
+  const trip = $('#tripDate').value;
+  if (!trip) return (dayOffset + 1) + '日目';
+  const [Y, M, D] = trip.split('-').map(Number);
+  const d = new Date(Date.UTC(Y, M - 1, D + dayOffset));
+  return (d.getUTCMonth() + 1) + '月' + d.getUTCDate() + '日（' + WEEKDAYS[d.getUTCDay()] + '）';
+}
+function dayLabelFromISO(iso) {
+  const [Y, M, D] = iso.split('-').map(Number);
+  const d = new Date(Date.UTC(Y, M - 1, D));
+  return M + '月' + D + '日（' + WEEKDAYS[d.getUTCDay()] + '）';
+}
+function switchTab(which) {
+  const plan = which === 'plan';
+  $('#panePlan').hidden = !plan;
+  $('#paneTrip').hidden = plan;
+  $('#tabBtnPlan').classList.toggle('active', plan);
+  $('#tabBtnTrip').classList.toggle('active', !plan);
+}
+$('#tabBtnPlan').addEventListener('click', () => switchTab('plan'));
+$('#tabBtnTrip').addEventListener('click', () => switchTab('trip'));
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 async function geocode(name) {
@@ -432,8 +454,17 @@ function renderResult(places, order, sim, legs, geometry, mode, roundTrip, start
   let totalKm = 0, totalCost = 0;
   legs.forEach(l => { totalKm += l.km; totalCost += legCostYen(l.km, mode, l); });
 
+  let curDay = -1;
   sim.stops.forEach((s, k) => {
     const p = places[s.idx];
+    const stopDay = Math.floor((k === 0 ? s.dep : s.arr) / 1440);
+    if (stopDay !== curDay) {
+      curDay = stopDay;
+      const dh = document.createElement('div');
+      dh.className = 'day-head';
+      dh.textContent = dayLabel(stopDay);
+      list.appendChild(dh);
+    }
     const card = document.createElement('div');
     card.className = 'stop-card';
     let html = '<h3><span class="badge">' + (k + 1) + '</span>' + escapeHtml(p.name) + '</h3>';
@@ -465,6 +496,13 @@ function renderResult(places, order, sim, legs, geometry, mode, roundTrip, start
     }
   });
   if (roundTrip) {
+    const endDay = Math.floor(sim.endTime / 1440);
+    if (endDay !== curDay) {
+      const dh = document.createElement('div');
+      dh.className = 'day-head';
+      dh.textContent = dayLabel(endDay);
+      list.appendChild(dh);
+    }
     const card = document.createElement('div');
     card.className = 'stop-card';
     card.innerHTML = '<h3><span class="badge">1</span>' + escapeHtml(places[0].name) + '（帰着）</h3><div class="stop-times">' + fmtDT(sim.endTime) + ' 着</div>';
@@ -476,6 +514,8 @@ function renderResult(places, order, sim, legs, geometry, mode, roundTrip, start
   $('#pointCount').textContent = places.length;
   $('#totalDist').textContent = totalKm.toFixed(1) + 'km';
   $('#totalCost').textContent = mode === 'driving' ? '¥' + totalCost : '¥0';
+  $('#tripEmpty').hidden = true;
+  switchTab('trip');
 }
 function escapeHtml(s) { return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 $('#calcBtn').addEventListener('click', calculate);
@@ -788,8 +828,17 @@ function renderTransit(places, order, stops, legs, roundTrip, endEpoch) {
   list.innerHTML = '';
   let totalKm = 0, totalFare = 0, fareUnknown = false, rideMin = 0;
   legs.forEach(l => { totalKm += l.km; rideMin += l.min; if (l.fare == null) fareUnknown = true; else totalFare += l.fare; });
+  let curDate = '';
   stops.forEach((s, k) => {
     const p = places[s.idx];
+    const dateOf = jstDateTime(s.depEpoch || s.arrEpoch).date;
+    if (dateOf !== curDate) {
+      curDate = dateOf;
+      const dh = document.createElement('div');
+      dh.className = 'day-head';
+      dh.textContent = dayLabelFromISO(dateOf);
+      list.appendChild(dh);
+    }
     const card = document.createElement('div');
     card.className = 'stop-card';
     let html = '<h3><span class="badge">' + (s.isReturn ? 1 : k + 1) + '</span>' + escapeHtml(p.name) + (s.isReturn ? '（帰着）' : '') + '</h3>';
@@ -829,6 +878,8 @@ function renderTransit(places, order, stops, legs, roundTrip, endEpoch) {
   $('#pointCount').textContent = places.length;
   $('#totalDist').textContent = totalKm.toFixed(1) + 'km';
   $('#totalCost').textContent = '¥' + totalFare + (fareUnknown ? '＋不明分' : '');
+  $('#tripEmpty').hidden = true;
+  switchTab('trip');
 }
 
 /* ===== 旅程の保存（下書き自動保存＋名前付き保存、いずれもこのブラウザのlocalStorage） ===== */

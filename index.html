@@ -8,6 +8,8 @@
 </head><body><div class="app">
 <header class="masthead"><div class="brand"><span class="brand-mark">R</span><div><div class="eyebrow">MAPS · PLANS · EFFICIENCY</div><h1>Route Planner <small>旅程プランナー</small></h1></div></div><div class="mast-actions"><span class="save-status">元サイト「Route Notebook」とJSON互換</span><input type="file" id="importFile" accept=".json,application/json" hidden><button id="importBtn" class="btn">JSON読込</button><button id="exportBtn" class="btn btn-outline">JSON書き出し</button></div></header>
 <div class="workspace"><aside class="sidebar">
+<div class="tabs"><button id="tabBtnPlan" class="tab-btn active">計画</button><button id="tabBtnTrip" class="tab-btn">旅程</button></div>
+<div id="panePlan">
 <div class="sidebar-intro">
 <h2>旅程の条件</h2>
 <p>場所ごとに「何分いたいか」と「この時間帯にいたい」を入れると、希望のズレが最小で、移動＋待ち時間も最短になる回り方を提案します。</p>
@@ -22,7 +24,6 @@
 <label>ガソリン単価 (円/L)<input id="tanka" type="number" value="170" min="0" step="1"></label>
 </div>
 <label class="check-row"><input id="roundTrip" type="checkbox"> 最後に出発地に戻る</label>
-<div class="metrics"><div><b id="pointCount">—</b><span>地点</span></div><div><b id="totalDist">—</b><span>総距離</span></div><div><b id="totalCost">—</b><span>合計料金</span></div></div>
 </div>
 <div class="panel-tools"><div class="panel-title">場所 <small>先頭が出発地</small></div><button id="addPlaceBtn" class="btn btn-small">＋ 場所</button></div>
 <div id="placeList" class="scroll-list"></div>
@@ -44,8 +45,13 @@
 <p class="place-note">行った場所を外し、今いる場所から残りの場所を回る最適な順序を計算し直します。過ぎてしまった希望時間は無効として扱います。</p>
 </div>
 <div id="importBar" class="import-bar" hidden><label>読み込む日程<select id="importGroup"></select></label><button id="importApply" class="btn btn-small btn-primary">この日程を読み込む</button></div>
-<section class="result-section"><div class="panel-tools"><div class="panel-title">提案旅程 <small id="resultSummary"></small></div></div>
+</div>
+<div id="paneTrip" hidden>
+<div class="metrics"><div><b id="pointCount">—</b><span>地点</span></div><div><b id="totalDist">—</b><span>総距離</span></div><div><b id="totalCost">—</b><span>合計料金</span></div></div>
+<div id="tripEmpty" class="trip-empty">まだ旅程がありません。「計画」タブで場所を入れて計算すると、ここに日ごとの旅程が表示されます。保存した旅程を読み込んでも表示されます。</div>
+<section class="result-section"><div class="panel-tools"><div class="panel-title">旅程 <small id="resultSummary"></small></div></div>
 <div id="resultList" class="scroll-list result-list"></div></section>
+</div>
 </aside>
 <main class="map-wrap"><div id="map"></div></main>
 </div></div>

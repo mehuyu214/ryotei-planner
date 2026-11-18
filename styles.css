@@ -47,6 +47,13 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
 .place-note{font-size:10px;color:#8992a2;margin-top:6px}
 .place-extra{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;margin-top:7px}
 .pin-btn{margin-top:8px}
+.tabs{display:flex;gap:6px;padding:12px 14px 0}
+.tab-btn{flex:1;border:1px solid #e2e5ee;background:#f6f6fa;color:#5d6579;border-radius:10px;padding:9px;font-size:13px;font-weight:800;cursor:pointer}
+.tab-btn.active{background:#6254ba;border-color:#6254ba;color:#fff}
+#paneTrip .metrics{margin:12px 14px 0}
+.trip-empty{margin:12px 14px;padding:12px;border:1px dashed #cfd3e0;border-radius:12px;color:#7c8291;font-size:12px;line-height:1.7}
+.day-head{margin:14px 2px 8px;padding:7px 10px;background:#efeafe;color:#4c4390;border-radius:9px;font-size:12px;font-weight:850}
+.day-head:first-child{margin-top:2px}
 .replan-panel{padding:0 14px 12px;border-bottom:1px solid #eceef3}
 .replan-panel .panel-tools{padding:10px 4px 8px}
 .replan-label{flex:1;font-size:10px;color:#7c8291;font-weight:750;min-width:0}
