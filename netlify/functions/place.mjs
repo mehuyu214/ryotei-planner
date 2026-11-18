@@ -12,7 +12,27 @@ function wallEpoch(date, time) {
   return Math.floor(Date.UTC(Y, M - 1, D, h, m) / 1000);
 }
 
+const rootCache = new Map(); // 同一インスタンス内キャッシュ（10分）
 async function fetchPreviewRoot(from, to, date, time) {
+  const cacheKey = from + '|' + to + '|' + date + '|' + time;
+  const hit = rootCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < 600000) return hit.root;
+  let lastErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const root = await fetchPreviewRootOnce(from, to, date, time);
+      rootCache.set(cacheKey, { at: Date.now(), root });
+      return root;
+    } catch (e) {
+      lastErr = e;
+      if (!/429/.test(String(e && e.message)) || attempt === 2) throw e;
+      await new Promise(r => setTimeout(r, 2500 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
+}
+
+async function fetchPreviewRootOnce(from, to, date, time) {
   const ep = wallEpoch(date, time);
   const data = '!4m12!4m11!1m2!1m1!1s' + encodeURIComponent(from) +
     '!1m2!1m1!1s' + encodeURIComponent(to) +

@@ -579,6 +579,20 @@ async function fetchTransitLeg(fromName, toName, epoch) {
   }
   return js.routes[0];
 }
+const PAIR_CACHE_KEY = 'ryotei-pair-durations-v1';
+function pairCacheGet(key) {
+  try { const c = JSON.parse(localStorage.getItem(PAIR_CACHE_KEY) || '{}'); const e = c[key]; if (e && Date.now() - e.at < 3600000) return e.min; } catch (err) {}
+  return null;
+}
+function pairCacheSet(key, min) {
+  try {
+    const c = JSON.parse(localStorage.getItem(PAIR_CACHE_KEY) || '{}');
+    c[key] = { at: Date.now(), min };
+    const keys = Object.keys(c);
+    if (keys.length > 300) keys.slice(0, keys.length - 300).forEach(k => delete c[k]);
+    localStorage.setItem(PAIR_CACHE_KEY, JSON.stringify(c));
+  } catch (err) {}
+}
 async function calculateTransit(places, startMin, roundTrip) {
   const dateStr = $('#tripDate').value || jstDateTime(Math.floor(Date.now() / 1000)).date;
   const n = places.length;
@@ -592,9 +606,13 @@ async function calculateTransit(places, startMin, roundTrip) {
       if (i === j) continue;
       donePairs++;
       setStatus('Googleで全区間の所要時間を取得中… ' + donePairs + '/' + totalPairs + '（' + places[i].name + ' → ' + places[j].name + '）');
+      const pairKey = (places[i].query || places[i].name) + '|' + (places[j].query || places[j].name) + '|' + dateStr + '|' + startMin;
+      const cachedMin = pairCacheGet(pairKey);
+      if (cachedMin != null) { dur[i][j] = cachedMin; continue; }
       try {
         const r = await fetchTransitLeg(places[i].query || places[i].name, places[j].query || places[j].name, refEpoch);
         dur[i][j] = r.durationMin || 0;
+        pairCacheSet(pairKey, dur[i][j]);
       } catch (e) { dur[i][j] = 100000; failedPairs++; }
       await sleep(350);
     }
