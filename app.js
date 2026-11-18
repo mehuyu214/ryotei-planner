@@ -2,7 +2,7 @@
 const $ = (s) => document.querySelector(s);
 const placeList = $('#placeList');
 const statusEl = $('#status');
-const MAX_PLACES = 25;
+const MAX_PLACES = 40;
 const PROFILE = { driving: 'driving', foot: 'foot', bike: 'bike' };
 const GMODE = { driving: 'driving', foot: 'walking', bike: 'bicycling', transit: 'transit' };
 const TRANSIT_API = 'https://ryotei-transit.netlify.app/route';
@@ -33,10 +33,11 @@ function addPlaceRow(name, stay, winStart, winEnd) {
     (isStart ? '<div class="place-note">出発地です。出発時刻にここを出ます。</div>' :
     '<div class="place-fields">' +
     '<label>滞在時間（分）<input class="f-stay" type="number" min="0" step="5" value="60"></label>' +
-    '<label>いたい時間から<input class="f-ws" type="time"></label>' +
-    '<label>いたい時間まで<input class="f-we" type="time"></label></div>' +
-    '<div class="place-note">希望時間帯は空欄でもOK。その時間帯に滞在が収まるよう旅程を組みます。</div>') +
+    '<label>いたい日時から<input class="f-ws" type="datetime-local"></label>' +
+    '<label>いたい日時まで<input class="f-we" type="datetime-local"></label></div>' +
+    '<div class="place-note">希望日時は空欄でもOK。その日時に滞在が収まるよう旅程を組みます。</div>') +
     '<div class="place-extra">' +
+    '<label>分類<input class="f-cat" type="text" list="catList" placeholder="観光・食事・宿泊など"></label>' +
     '<label>住所・補足（見つからない時）<input class="f-addr" type="text" placeholder="住所や正式名称"></label>' +
     '<label>座標（緯度,経度）<input class="f-coord" type="text" placeholder="例：34.6795,135.1783"></label></div>';
   if (name) row.querySelector('.place-name').value = name;
@@ -82,6 +83,32 @@ function fmtDur(mins) {
   mins = Math.round(mins);
   if (mins < 60) return mins + '分';
   return Math.floor(mins / 60) + '時間' + (mins % 60 ? (mins % 60) + '分' : '');
+}
+// datetime-local の値 → 旅行初日0:00からの絶対分。旧形式 HH:MM はその日の時刻として扱う。
+function dtAbsMin(v) {
+  if (!v) return null;
+  const m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  if (!m) return timeToMin(v);
+  const trip = $('#tripDate').value;
+  if (!trip) return null;
+  const [Y, M, D] = trip.split('-').map(Number);
+  const dayDiff = Math.round((Date.UTC(+m[1], +m[2] - 1, +m[3]) - Date.UTC(Y, M - 1, D)) / 86400000);
+  return dayDiff * 1440 + (+m[4]) * 60 + (+m[5]);
+}
+// 絶対分 → 「M/D H:MM」（初日は時刻のみ）
+function fmtDT(absMin) {
+  const day = Math.floor(absMin / 1440);
+  const t = fmtTime(absMin - day * 1440);
+  const trip = $('#tripDate').value;
+  if (!trip || day === 0) return t;
+  const [Y, M, D] = trip.split('-').map(Number);
+  const d = new Date(Date.UTC(Y, M - 1, D + day));
+  return (d.getUTCMonth() + 1) + '/' + d.getUTCDate() + ' ' + t;
+}
+const CAT_COLORS = { '宿泊': '#367ca3', '交通・駅': '#367ca3', '展示・イベント': '#15927b', '食事': '#ba507d', '喫茶': '#ba507d', '買い物': '#b07734', '観光': '#6254ba' };
+function catColor(cat) { return CAT_COLORS[(cat || '').trim()] || '#6254ba'; }
+function markerHtml(num, cat, isStart) {
+  return '<div class="num-marker' + (isStart ? ' start' : '') + '" style="background:' + catColor(cat) + '">' + num + '</div>';
 }
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -270,78 +297,122 @@ function gmapsLink(a, b, mode) {
     '&destination=' + b.lat + ',' + b.lng + '&travelmode=' + GMODE[mode];
 }
 
-async function calculate() {
-  const btn = $('#calcBtn');
-  const rows = [...placeList.children];
+function buildPlaces(rows) {
   const places = [];
   for (let i = 0; i < rows.length; i++) {
     const name = rows[i].querySelector('.place-name').value.trim();
-    if (!name) { setStatus((i + 1) + '番目の場所名が空です', true); return; }
+    if (!name) { setStatus((i + 1) + '番目の場所名が空です', true); return null; }
     const preset = rows[i].dataset.lat ? { lat: parseFloat(rows[i].dataset.lat), lng: parseFloat(rows[i].dataset.lng) } : null;
-    if (i === 0) { places.push({ name, stay: 0, winStart: null, winEnd: null, ...(preset || {}) }); continue; }
+    const cat = rows[i].querySelector('.f-cat') ? rows[i].querySelector('.f-cat').value.trim() : '';
+    if (i === 0) { places.push({ name, cat, stay: 0, winStart: null, winEnd: null, ...(preset || {}) }); continue; }
     const stay = Math.max(0, parseInt(rows[i].querySelector('.f-stay').value, 10) || 0);
-    let ws = timeToMin(rows[i].querySelector('.f-ws').value);
-    let we = timeToMin(rows[i].querySelector('.f-we').value);
-    if (ws != null && we != null && we <= ws) we += 1440; // window past midnight
-    places.push({ name, stay, winStart: ws, winEnd: we, ...(preset || {}) });
+    let ws = dtAbsMin(rows[i].querySelector('.f-ws').value);
+    let we = dtAbsMin(rows[i].querySelector('.f-we').value);
+    if (ws != null && we != null && we <= ws) we = null; // 終了が開始以前なら「開始のみ」の希望として扱う
+    places.push({ name, cat, stay, winStart: ws, winEnd: we, ...(preset || {}) });
   }
-  if (places.length < 2) { setStatus('場所を2件以上入れてください', true); return; }
-  const mode = $('#mode').value;
+  if (places.length < 2) { setStatus('場所を2件以上入れてください', true); return null; }
+  return places;
+}
+
+async function runRoadMode(places, startMin, roundTrip, mode) {
   const profile = PROFILE[mode];
+  setStatus('移動時間を調べています…');
+  let dur, usedFallback = false;
+  try { dur = await osrmTable(profile, places); }
+  catch (e) {
+    usedFallback = true;
+    dur = places.map(a => places.map(b => haversineKm(a, b) * 1.3 / FALLBACK_SPEED[mode] * 60));
+  }
+  setStatus('最高効率の旅程を組んでいます…');
+  const { order } = bestOrder(places, dur, startMin, roundTrip);
+  const orderedPts = order.map(i => places[i]);
+  const routePts = roundTrip ? orderedPts.concat([places[0]]) : orderedPts;
+  let legs = [], geometry = null;
+  try {
+    const route = await osrmRoute(profile, routePts);
+    geometry = route.geometry.coordinates.map(c => [c[1], c[0]]);
+    legs = route.legs.map(l => ({ km: l.distance / 1000, min: l.duration / 60 }));
+  } catch (e) {
+    usedFallback = true;
+    geometry = routePts.map(p => [p.lat, p.lng]);
+    for (let k = 1; k < routePts.length; k++) {
+      const a = routePts[k - 1], b = routePts[k];
+      legs.push({ km: haversineKm(a, b) * 1.3, min: dur[order[k - 1] ?? 0][order[k] ?? 0] || haversineKm(a, b) * 1.3 / FALLBACK_SPEED[mode] * 60 });
+    }
+  }
+  const durFinal = places.map(() => places.map(() => 0));
+  for (let k = 1; k < order.length; k++) durFinal[order[k - 1]][order[k]] = legs[k - 1].min;
+  if (roundTrip) durFinal[order[order.length - 1]][0] = legs[legs.length - 1].min;
+  const sim = simulate(order, durFinal, places, startMin, roundTrip);
+  renderResult(places, order, sim, legs, geometry, mode, roundTrip, startMin);
+  setStatus(usedFallback ? '経路サービスの一部が使えなかったため概算で計算しました' : '計算できました');
+}
+
+async function calculate() {
+  const btn = $('#calcBtn');
+  const rows = [...placeList.children];
+  const places = buildPlaces(rows);
+  if (!places) return;
+  const mode = $('#mode').value;
   const startMin = timeToMin($('#startTime').value) ?? 540;
   const roundTrip = $('#roundTrip').checked;
   btn.disabled = true;
   try {
-    // 1) 場所の特定（座標欄 → 取込済み座標 → Google検索 → OSM検索）
+    // 場所の特定（座標欄 → 取込済み座標 → Google検索 → OSM検索）
     await resolvePlaces(places, rows);
     if (mode === 'transit') {
-      const failedPairs = await calculateTransit(places, startMin, roundTrip);
-      setStatus(failedPairs
-        ? '計算できました（一部 ' + failedPairs + ' 区間はGoogleで経路が見つからず、順序決定で強く不利に扱いました）'
-        : '計算できました（全区間Google実データ・全通り探索）', failedPairs > 0);
+      const r = await calculateTransit(places, startMin, roundTrip);
+      setStatus(r.failedPairs
+        ? '計算できました（一部 ' + r.failedPairs + ' 区間はGoogleで経路が見つからず、順序決定で強く不利に扱いました）'
+        : (r.proxy ? '計算できました（地点が多いため順序決定は概算時間、表示する時刻はGoogle実ダイヤ）' : '計算できました（全区間Google実データ・全通り探索）'), r.failedPairs > 0);
       return;
     }
-    // 2) Duration matrix
-    setStatus('移動時間を調べています…');
-    let dur, usedFallback = false;
-    try { dur = await osrmTable(profile, places); }
-    catch (e) {
-      usedFallback = true;
-      dur = places.map(a => places.map(b => haversineKm(a, b) * 1.3 / FALLBACK_SPEED[mode] * 60));
-    }
-    // 3) Optimize order + schedule
-    setStatus('最高効率の旅程を組んでいます…');
-    const { order } = bestOrder(places, dur, startMin, roundTrip);
-    // 4) Real route geometry + leg data
-    const orderedPts = order.map(i => places[i]);
-    const routePts = roundTrip ? orderedPts.concat([places[0]]) : orderedPts;
-    let legs = [], geometry = null;
-    try {
-      const route = await osrmRoute(profile, routePts);
-      geometry = route.geometry.coordinates.map(c => [c[1], c[0]]);
-      legs = route.legs.map(l => ({ km: l.distance / 1000, min: l.duration / 60 }));
-    } catch (e) {
-      usedFallback = true;
-      geometry = routePts.map(p => [p.lat, p.lng]);
-      for (let k = 1; k < routePts.length; k++) {
-        const a = routePts[k - 1], b = routePts[k];
-        legs.push({ km: haversineKm(a, b) * 1.3, min: dur[order[k - 1] ?? 0][order[k] ?? 0] || haversineKm(a, b) * 1.3 / FALLBACK_SPEED[mode] * 60 });
-      }
-    }
-    // Final schedule using route leg durations
-    const legDur = [0]; legs.forEach(l => legDur.push(l.min));
-    const durFinal = places.map(() => places.map(() => 0));
-    for (let k = 1; k < order.length; k++) durFinal[order[k - 1]][order[k]] = legs[k - 1].min;
-    if (roundTrip) durFinal[order[order.length - 1]][0] = legs[legs.length - 1].min;
-    const sim = simulate(order, durFinal, places, startMin, roundTrip);
-    renderResult(places, order, sim, legs, geometry, mode, roundTrip, startMin);
-    setStatus(usedFallback ? '経路サービスの一部が使えなかったため概算で計算しました' : '計算できました');
+    await runRoadMode(places, startMin, roundTrip, mode);
   } catch (err) {
     setStatus(err && err.message ? err.message : '計算に失敗しました。通信環境を確認してもう一度お試しください', true);
   } finally {
     btn.disabled = false;
   }
 }
+
+async function showPins() {
+  const btn = $('#pinBtn');
+  const rows = [...placeList.children];
+  const places = buildPlaces(rows);
+  if (!places) return;
+  btn.disabled = true;
+  try {
+    await resolvePlaces(places, rows);
+    places.forEach((p, i) => {
+      rows[i].dataset.lat = p.lat; rows[i].dataset.lng = p.lng;
+      const coordEl = rows[i].querySelector('.f-coord');
+      if (coordEl && !coordEl.value) coordEl.value = p.lat.toFixed(6) + ',' + p.lng.toFixed(6);
+      const addrEl = rows[i].querySelector('.f-addr');
+      if (addrEl && !addrEl.value && p.address) addrEl.value = p.address;
+    });
+    mapLayer.clearLayers();
+    const pts = [];
+    places.forEach((p, i) => {
+      pts.push([p.lat, p.lng]);
+      const icon = L.divIcon({ className: '', html: markerHtml(i + 1, p.cat, i === 0), iconSize: [28, 28], iconAnchor: [14, 14] });
+      let pop = '<b>' + (i + 1) + '. ' + escapeHtml(p.name) + '</b>';
+      if (p.cat) pop += '<br>分類：' + escapeHtml(p.cat);
+      if (p.address) pop += '<br>' + escapeHtml(p.address);
+      if (i > 0) {
+        pop += '<br>滞在 ' + fmtDur(p.stay);
+        if (p.winStart != null || p.winEnd != null) pop += '<br>希望 ' + (p.winStart != null ? fmtDT(p.winStart) : '…') + '〜' + (p.winEnd != null ? fmtDT(p.winEnd) : '…');
+      }
+      L.marker([p.lat, p.lng], { icon }).addTo(mapLayer).bindPopup(pop);
+    });
+    if (pts.length) map.fitBounds(L.latLngBounds(pts), { padding: [30, 30] });
+    setStatus('ピンを表示しました（' + places.length + '件）。このまま旅程を計算できます');
+    saveDraft();
+  } catch (err) {
+    setStatus(err && err.message ? err.message : '場所の特定に失敗しました', true);
+  } finally { btn.disabled = false; }
+}
+$('#pinBtn').addEventListener('click', showPins);
 
 let lastResult = null;
 function renderResult(places, order, sim, legs, geometry, mode, roundTrip, startMin) {
@@ -352,8 +423,8 @@ function renderResult(places, order, sim, legs, geometry, mode, roundTrip, start
   }
   order.forEach((pi, k) => {
     const p = places[pi];
-    const icon = L.divIcon({ className: '', html: '<div class="num-marker' + (k === 0 ? ' start' : '') + '">' + (k + 1) + '</div>', iconSize: [28, 28], iconAnchor: [14, 14] });
-    L.marker([p.lat, p.lng], { icon }).addTo(mapLayer).bindPopup('<b>' + (k + 1) + '. ' + escapeHtml(p.name) + '</b>');
+    const icon = L.divIcon({ className: '', html: markerHtml(k + 1, p.cat, k === 0), iconSize: [28, 28], iconAnchor: [14, 14] });
+    L.marker([p.lat, p.lng], { icon }).addTo(mapLayer).bindPopup('<b>' + (k + 1) + '. ' + escapeHtml(p.name) + '</b>' + (p.cat ? '<br>' + escapeHtml(p.cat) : ''));
   });
   if (geometry) map.fitBounds(L.latLngBounds(geometry), { padding: [30, 30] });
 
@@ -368,13 +439,13 @@ function renderResult(places, order, sim, legs, geometry, mode, roundTrip, start
     card.className = 'stop-card';
     let html = '<h3><span class="badge">' + (k + 1) + '</span>' + escapeHtml(p.name) + '</h3>';
     if (k === 0) {
-      html += '<div class="stop-times">' + fmtTime(s.dep) + ' 出発</div>';
+      html += '<div class="stop-times">' + fmtDT(s.dep) + ' 出発</div>';
     } else {
-      html += '<div class="stop-times">' + fmtTime(s.arr) + ' 着 → ' + fmtTime(s.dep) + ' 発</div>';
-      let meta = '滞在 ' + fmtDur(p.stay);
+      html += '<div class="stop-times">' + fmtDT(s.arr) + ' 着 → ' + fmtDT(s.dep) + ' 発</div>';
+      let meta = (p.cat ? escapeHtml(p.cat) + ' ・ ' : '') + '滞在 ' + fmtDur(p.stay);
       if (s.wait > 0.5) meta += '（到着が早いため ' + fmtDur(s.wait) + ' 待ち）';
       if (p.winStart != null || p.winEnd != null) {
-        const wtxt = '希望 ' + (p.winStart != null ? fmtTime(p.winStart) : '…') + '〜' + (p.winEnd != null ? fmtTime(p.winEnd) : '…');
+        const wtxt = '希望 ' + (p.winStart != null ? fmtDT(p.winStart) : '…') + '〜' + (p.winEnd != null ? fmtDT(p.winEnd) : '…');
         if (s.viol < 0.5) meta += '<br>' + wtxt + ' → <span class="win-ok">希望どおり</span>';
         else meta += '<br>' + wtxt + ' → <span class="win-ng">約' + Math.round(s.viol) + '分ズレ</span>';
       }
@@ -397,7 +468,7 @@ function renderResult(places, order, sim, legs, geometry, mode, roundTrip, start
   if (roundTrip) {
     const card = document.createElement('div');
     card.className = 'stop-card';
-    card.innerHTML = '<h3><span class="badge">1</span>' + escapeHtml(places[0].name) + '（帰着）</h3><div class="stop-times">' + fmtTime(sim.endTime) + ' 着</div>';
+    card.innerHTML = '<h3><span class="badge">1</span>' + escapeHtml(places[0].name) + '（帰着）</h3><div class="stop-times">' + fmtDT(sim.endTime) + ' 着</div>';
     list.appendChild(card);
   }
   const totalTravel = legs.reduce((a, l) => a + l.min, 0);
@@ -426,6 +497,7 @@ function loadPlacesIntoForm(list, firstTime) {
     const row = placeList.children[i];
     row.querySelector('.place-name').value = it.name;
     if (it.lat != null && it.lng != null) { row.dataset.lat = it.lat; row.dataset.lng = it.lng; }
+    if (it.cat) row.querySelector('.f-cat').value = it.cat;
     if (it.address) row.querySelector('.f-addr').value = it.address;
     if (it.lat != null && it.lng != null) row.querySelector('.f-coord').value = it.lat + ',' + it.lng;
     if (i > 0) {
@@ -437,6 +509,22 @@ function loadPlacesIntoForm(list, firstTime) {
   renumber();
   if (firstTime) $('#startTime').value = firstTime;
   lastResult = null;
+}
+function dayToISODate(day) {
+  if (!day) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(day)) return day;
+  const m = String(day).match(/^(\d{1,2})\/(\d{1,2})/);
+  if (m) {
+    const yr = ($('#tripDate').value || '').slice(0, 4) || String(new Date().getFullYear());
+    return yr + '-' + pad2(+m[1]) + '-' + pad2(+m[2]);
+  }
+  return null;
+}
+function addMinToDT(dtStr, mins) {
+  const m = String(dtStr).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  if (!m) return null;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5] + mins));
+  return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate()) + 'T' + pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes());
 }
 function buildGroups(data) {
   const pointMap = new Map();
@@ -459,12 +547,12 @@ function applyGroup(pointMap, group) {
     if (!p || seen.has(String(p.id))) return;
     seen.add(String(p.id));
     const t = ev.time && /^\d{1,2}:\d{2}$/.test(ev.time) ? ev.time : null;
-    let stay = 60, ws = t, we = null;
-    if (typeof ev.stayMinutes === 'number' && ev.stayMinutes >= 0) {
-      stay = ev.stayMinutes;
-      if (t) { const end = timeToMin(t) + stay; if (end < 1440) we = fmtHHMM(end); }
-    }
-    list.push({ name: p.name, lat: (typeof p.lat === 'number' ? p.lat : null), lng: (typeof p.lon === 'number' ? p.lon : null), address: p.address || '', stay, winStart: ws, winEnd: we });
+    let stay = 60;
+    if (typeof ev.stayMinutes === 'number' && ev.stayMinutes >= 0) stay = ev.stayMinutes;
+    const isoDay = dayToISODate(ev.day);
+    let ws = null, we = null;
+    if (isoDay && t) { ws = isoDay + 'T' + t; we = addMinToDT(ws, stay); }
+    list.push({ name: p.name, lat: (typeof p.lat === 'number' ? p.lat : null), lng: (typeof p.lon === 'number' ? p.lon : null), address: p.address || '', cat: p.category || '', stay, winStart: ws, winEnd: we });
   });
   if (list.length < 2) { setStatus('読み込める地点が2件未満でした', true); return; }
   if (list.length > MAX_PLACES) list.length = MAX_PLACES;
@@ -600,25 +688,35 @@ function pairCacheSet(key, min) {
 async function calculateTransit(places, startMin, roundTrip) {
   const dateStr = $('#tripDate').value || jstDateTime(Math.floor(Date.now() / 1000)).date;
   const n = places.length;
-  // 1) 全区間の所要時間をGoogleマップで取得する（出発時刻基準）
-  const dur = Array.from({ length: n }, () => new Array(n).fill(0));
-  let donePairs = 0, failedPairs = 0;
-  const totalPairs = n * (n - 1);
-  const refEpoch = epochOfJST(dateStr, startMin);
-  for (let i = 0; i < n; i++) {
-    for (let j = 0; j < n; j++) {
-      if (i === j) continue;
-      donePairs++;
-      setStatus('Googleで全区間の所要時間を取得中… ' + donePairs + '/' + totalPairs + '（' + places[i].name + ' → ' + places[j].name + '）');
-      const pairKey = (places[i].query || places[i].name) + '|' + (places[j].query || places[j].name) + '|' + dateStr + '|' + startMin;
-      const cachedMin = pairCacheGet(pairKey);
-      if (cachedMin != null) { dur[i][j] = cachedMin; continue; }
-      try {
-        const r = await fetchTransitLeg(places[i].query || places[i].name, places[j].query || places[j].name, refEpoch);
-        dur[i][j] = r.durationMin || 0;
-        pairCacheSet(pairKey, dur[i][j]);
-      } catch (e) { dur[i][j] = 100000; failedPairs++; }
-      await sleep(350);
+  let failedPairs = 0, proxy = false;
+  let dur;
+  if (n > 12) {
+    // 地点が多い場合は順序決定だけ概算行列を使う（表示する発着時刻は実ダイヤで取得する）
+    proxy = true;
+    setStatus('地点が多いため、順序決定用の概算の移動時間を取得中…');
+    try { dur = await osrmTable('driving', places); }
+    catch (e) { dur = places.map(a => places.map(b => haversineKm(a, b) * 1.3 / FALLBACK_SPEED.driving * 60)); }
+  } else {
+    // 1) 全区間の所要時間をGoogleマップで取得する（出発時刻基準）
+    dur = Array.from({ length: n }, () => new Array(n).fill(0));
+    let donePairs = 0;
+    const totalPairs = n * (n - 1);
+    const refEpoch = epochOfJST(dateStr, startMin);
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        if (i === j) continue;
+        donePairs++;
+        setStatus('Googleで全区間の所要時間を取得中… ' + donePairs + '/' + totalPairs + '（' + places[i].name + ' → ' + places[j].name + '）');
+        const pairKey = (places[i].query || places[i].name) + '|' + (places[j].query || places[j].name) + '|' + dateStr + '|' + startMin;
+        const cachedMin = pairCacheGet(pairKey);
+        if (cachedMin != null) { dur[i][j] = cachedMin; continue; }
+        try {
+          const r = await fetchTransitLeg(places[i].query || places[i].name, places[j].query || places[j].name, refEpoch);
+          dur[i][j] = r.durationMin || 0;
+          pairCacheSet(pairKey, dur[i][j]);
+        } catch (e) { dur[i][j] = 100000; failedPairs++; }
+        await sleep(350);
+      }
     }
   }
   // 2) 全通り探索で回る順序を決める
@@ -658,9 +756,13 @@ async function calculateTransit(places, startMin, roundTrip) {
     prevIdx = curIdx;
   }
   renderTransit(places, order, stops, legs, roundTrip, cursor);
-  return failedPairs;
+  return { failedPairs, proxy };
 }
 function renderTransit(places, order, stops, legs, roundTrip, endEpoch) {
+  const hmD = (epoch) => {
+    const p = jstDateTime(epoch);
+    return (p.date !== $('#tripDate').value ? (Number(p.date.slice(5, 7)) + '/' + Number(p.date.slice(8, 10)) + ' ') : '') + p.hm;
+  };
   const simLike = {
     stops: stops.filter(s => !s.isReturn).map(s => ({ idx: s.idx, arr: jstDateTime(s.arrEpoch).mins, stayStart: jstDateTime(s.stayStartEpoch).mins, dep: jstDateTime(s.depEpoch).mins, wait: s.waitMin, viol: s.violMin })),
     wait: stops.reduce((a, s) => a + s.waitMin + s.trainWaitMin, 0),
@@ -681,8 +783,8 @@ function renderTransit(places, order, stops, legs, roundTrip, endEpoch) {
   });
   order.forEach((pi, k) => {
     const p = places[pi];
-    const icon = L.divIcon({ className: '', html: '<div class="num-marker' + (k === 0 ? ' start' : '') + '">' + (k + 1) + '</div>', iconSize: [28, 28], iconAnchor: [14, 14] });
-    L.marker([p.lat, p.lng], { icon }).addTo(mapLayer).bindPopup('<b>' + (k + 1) + '. ' + escapeHtml(p.name) + '</b>');
+    const icon = L.divIcon({ className: '', html: markerHtml(k + 1, p.cat, k === 0), iconSize: [28, 28], iconAnchor: [14, 14] });
+    L.marker([p.lat, p.lng], { icon }).addTo(mapLayer).bindPopup('<b>' + (k + 1) + '. ' + escapeHtml(p.name) + '</b>' + (p.cat ? '<br>' + escapeHtml(p.cat) : ''));
   });
   if (allPts.length) map.fitBounds(L.latLngBounds(allPts), { padding: [30, 30] });
   const list = $('#resultList');
@@ -695,16 +797,16 @@ function renderTransit(places, order, stops, legs, roundTrip, endEpoch) {
     card.className = 'stop-card';
     let html = '<h3><span class="badge">' + (s.isReturn ? 1 : k + 1) + '</span>' + escapeHtml(p.name) + (s.isReturn ? '（帰着）' : '') + '</h3>';
     if (k === 0) {
-      html += '<div class="stop-times">' + jstDateTime(s.depEpoch).hm + ' 出発</div>';
+      html += '<div class="stop-times">' + hmD(s.depEpoch) + ' 出発</div>';
     } else if (s.isReturn) {
-      html += '<div class="stop-times">' + jstDateTime(s.arrEpoch).hm + ' 着</div>';
+      html += '<div class="stop-times">' + hmD(s.arrEpoch) + ' 着</div>';
     } else {
-      html += '<div class="stop-times">' + jstDateTime(s.arrEpoch).hm + ' 着 → ' + jstDateTime(s.depEpoch).hm + ' 発</div>';
-      let meta = '滞在 ' + fmtDur(p.stay);
+      html += '<div class="stop-times">' + hmD(s.arrEpoch) + ' 着 → ' + hmD(s.depEpoch) + ' 発</div>';
+      let meta = (p.cat ? escapeHtml(p.cat) + ' ・ ' : '') + '滞在 ' + fmtDur(p.stay);
       if (s.trainWaitMin > 0.5) meta += '（電車待ち ' + fmtDur(s.trainWaitMin) + '）';
       if (s.waitMin > 0.5) meta += '（到着が早いため ' + fmtDur(s.waitMin) + ' 待ち）';
       if (p.winStart != null || p.winEnd != null) {
-        const wtxt = '希望 ' + (p.winStart != null ? fmtTime(p.winStart) : '…') + '〜' + (p.winEnd != null ? fmtTime(p.winEnd) : '…');
+        const wtxt = '希望 ' + (p.winStart != null ? fmtDT(p.winStart) : '…') + '〜' + (p.winEnd != null ? fmtDT(p.winEnd) : '…');
         if (s.violMin < 0.5) meta += '<br>' + wtxt + ' → <span class="win-ok">希望どおり</span>';
         else meta += '<br>' + wtxt + ' → <span class="win-ng">約' + Math.round(s.violMin) + '分ズレ</span>';
       }
@@ -718,7 +820,7 @@ function renderTransit(places, order, stops, legs, roundTrip, endEpoch) {
       const from = places[s.idx], to = places[stops[k + 1].idx];
       const row = document.createElement('div');
       row.className = 'leg-row';
-      row.innerHTML = '<span>' + jstDateTime(leg.depEpoch).hm + '発 → ' + jstDateTime(leg.arrEpoch).hm + '着 ・ ' +
+      row.innerHTML = '<span>' + hmD(leg.depEpoch) + '発 → ' + hmD(leg.arrEpoch) + '着 ・ ' +
         (leg.lines.length ? escapeHtml(leg.lines.join('・')) + ' ・ ' : '') + fmtDur(leg.min) + ' ・ ' +
         (leg.fare != null ? '¥' + leg.fare : '運賃不明') + '</span>' +
         '<a target="_blank" rel="noopener" href="' + gmapsLink(from, to, 'transit') + '">Googleマップで開く</a>';
@@ -744,6 +846,7 @@ function serializeForm() {
     nenpi: $('#nenpi').value, tanka: $('#tanka').value, roundTrip: $('#roundTrip').checked,
     places: rows.map((row, i) => ({
       name: row.querySelector('.place-name').value,
+      cat: row.querySelector('.f-cat') ? row.querySelector('.f-cat').value : '',
       lat: row.dataset.lat ? parseFloat(row.dataset.lat) : null,
       lng: row.dataset.lng ? parseFloat(row.dataset.lng) : null,
       stay: i === 0 ? null : row.querySelector('.f-stay').value,
@@ -765,10 +868,12 @@ function applyFormState(state) {
   if (state.tanka) $('#tanka').value = state.tanka;
   $('#roundTrip').checked = !!state.roundTrip;
   placeList.innerHTML = '';
+  const fixDT = (v) => (v && /^\d{1,2}:\d{2}$/.test(v) && state.date) ? (state.date + 'T' + (v.length === 4 ? '0' + v : v)) : (v || null);
   (state.places || []).forEach(pl => {
-    addPlaceRow(pl.name || '', pl.stay === '' || pl.stay == null ? null : Number(pl.stay), pl.ws || null, pl.we || null);
+    addPlaceRow(pl.name || '', pl.stay === '' || pl.stay == null ? null : Number(pl.stay), fixDT(pl.ws), fixDT(pl.we));
     const row = placeList.children[placeList.children.length - 1];
     if (pl.lat != null && pl.lng != null) { row.dataset.lat = pl.lat; row.dataset.lng = pl.lng; }
+    if (pl.cat) row.querySelector('.f-cat').value = pl.cat;
     if (pl.addr) row.querySelector('.f-addr').value = pl.addr;
     if (pl.coord) row.querySelector('.f-coord').value = pl.coord;
   });
@@ -849,3 +954,64 @@ placeList.addEventListener('click', () => setTimeout(saveDraft, 0));
     if (draft.places.some(p => p.name)) setStatus('前回の下書きを復元しました');
   }
 })();
+
+/* ===== 途中で再計算（アクシデント対応） ===== */
+function refreshReplanLists() {
+  const names = [...placeList.children].map(r => r.querySelector('.place-name').value.trim()).filter(Boolean);
+  const hereSel = $('#replanHere');
+  const prevHere = hereSel.value;
+  hereSel.innerHTML = '<option value="">（場所を選ぶ）</option>' + names.map(n => '<option value="' + escapeHtml(n) + '">' + escapeHtml(n) + '</option>').join('');
+  if (names.includes(prevHere)) hereSel.value = prevHere;
+  const box = $('#replanVisited');
+  const prevChecked = new Set([...box.querySelectorAll('input:checked')].map(x => x.value));
+  box.innerHTML = '';
+  names.forEach(n => {
+    const lab = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.value = n;
+    if (prevChecked.has(n)) cb.checked = true;
+    lab.appendChild(cb);
+    lab.appendChild(document.createTextNode(n));
+    box.appendChild(lab);
+  });
+  const rt = $('#replanTime');
+  if (!rt.value) {
+    const d = new Date(Date.now() + 32400 * 1000);
+    rt.value = d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate()) + 'T' + pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes());
+  }
+}
+async function replan() {
+  const btn = $('#replanBtn');
+  const rows = [...placeList.children];
+  const places = buildPlaces(rows);
+  if (!places) return;
+  const hereName = $('#replanHere').value;
+  if (!hereName) { setStatus('今いる場所を選んでください', true); return; }
+  const nowAbs = dtAbsMin($('#replanTime').value);
+  if (nowAbs == null) { setStatus('現在日時を入れてください', true); return; }
+  const visited = new Set([...document.querySelectorAll('#replanVisited input:checked')].map(x => x.value));
+  btn.disabled = true;
+  try {
+    await resolvePlaces(places, rows);
+    const here = places.find(p => p.name === hereName);
+    if (!here) { setStatus('今いる場所が場所リストにありません', true); return; }
+    const rest = places.filter(p => p.name !== hereName && !visited.has(p.name));
+    if (!rest.length) { setStatus('残りの場所がありません', true); return; }
+    const sub = [here, ...rest].map(p => ({ ...p }));
+    // 過ぎてしまった希望時間は無効化する
+    sub.forEach(p => { if (p.winEnd != null && p.winEnd < nowAbs) { p.winStart = null; p.winEnd = null; } });
+    const mode = $('#mode').value;
+    if (mode === 'transit') {
+      const r = await calculateTransit(sub, nowAbs, false);
+      setStatus('今からの最適経路を計算しました（' + hereName + ' から残り ' + rest.length + ' 件）' + (r.failedPairs ? '※一部 ' + r.failedPairs + ' 区間はGoogleで取得できず不利に扱いました' : ''), r.failedPairs > 0);
+    } else {
+      await runRoadMode(sub, nowAbs, false, mode);
+      setStatus('今からの最適経路を計算しました（' + hereName + ' から残り ' + rest.length + ' 件）');
+    }
+  } catch (err) {
+    setStatus(err && err.message ? err.message : '再計算に失敗しました', true);
+  } finally { btn.disabled = false; }
+}
+$('#replanBtn').addEventListener('click', replan);
+document.querySelector('.sidebar').addEventListener('input', refreshReplanLists);
+refreshReplanLists();

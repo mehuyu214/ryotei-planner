@@ -45,7 +45,15 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
 .place-fields label{font-size:10px;color:#7c8291;font-weight:750}
 .place-fields input{display:block;width:100%;margin-top:4px;border:1px solid #e2e5ee;border-radius:8px;padding:7px 5px;font-size:12px;background:#fff}
 .place-note{font-size:10px;color:#8992a2;margin-top:6px}
-.place-extra{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px}
+.place-extra{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;margin-top:7px}
+.pin-btn{margin-top:8px}
+.replan-panel{padding:0 14px 12px;border-bottom:1px solid #eceef3}
+.replan-panel .panel-tools{padding:10px 4px 8px}
+.replan-label{flex:1;font-size:10px;color:#7c8291;font-weight:750;min-width:0}
+.replan-label input,.replan-label select{display:block;width:100%;margin-top:5px;border:1px solid #e2e5ee;border-radius:9px;background:#fbfbfd;padding:8px 6px;font-size:12px;color:#313d54}
+.replan-sub{font-size:10px;color:#7c8291;font-weight:750;margin:2px 0 6px}
+.replan-visited{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.replan-visited label{display:flex;align-items:center;gap:5px;font-size:11px;font-weight:700;color:#344059;background:#f6f6fa;border:1px solid #e6e7ee;border-radius:99px;padding:5px 10px;cursor:pointer}
 .place-extra label{font-size:10px;color:#7c8291;font-weight:750}
 .place-extra input{display:block;width:100%;margin-top:4px;border:1px solid #e2e5ee;border-radius:8px;padding:7px 5px;font-size:12px;background:#fff}
 .calc-row{padding:6px 14px 4px}

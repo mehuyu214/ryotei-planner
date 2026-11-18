@@ -26,13 +26,22 @@
 </div>
 <div class="panel-tools"><div class="panel-title">場所 <small>先頭が出発地</small></div><button id="addPlaceBtn" class="btn btn-small">＋ 場所</button></div>
 <div id="placeList" class="scroll-list"></div>
-<div class="calc-row"><button id="calcBtn" class="btn btn-primary calc-btn">最高効率の旅程を計算</button></div>
+<div class="calc-row"><button id="calcBtn" class="btn btn-primary calc-btn">最高効率の旅程を計算</button><button id="pinBtn" class="btn calc-btn pin-btn">場所を特定して地図にピンを表示</button></div>
+<datalist id="catList"><option value="観光"></option><option value="食事"></option><option value="宿泊"></option><option value="交通・駅"></option><option value="展示・イベント"></option><option value="買い物"></option><option value="その他"></option></datalist>
 <div id="status" class="status" role="status"></div>
 <div class="save-panel">
 <div class="panel-tools"><div class="panel-title">旅程の保存 <small>このブラウザに保存</small></div></div>
 <div class="save-row"><input id="saveName" type="text" placeholder="旅程の名前（例：明日のかながわ巡り）"><button id="saveBtn" class="btn btn-small btn-primary">保存</button></div>
 <div class="save-row"><select id="savedList"><option value="">（保存なし）</option></select><button id="loadSaveBtn" class="btn btn-small">読込</button><button id="delSaveBtn" class="btn btn-small btn-danger">削除</button></div>
 <p class="place-note">入力内容は自動で下書き保存され、再読み込みしても消えません。名前付き保存では計算結果も一緒に残せます。</p>
+</div>
+<div class="replan-panel">
+<div class="panel-tools"><div class="panel-title">途中で再計算 <small>アクシデント時</small></div></div>
+<div class="save-row"><label class="replan-label">現在日時<input id="replanTime" type="datetime-local"></label><label class="replan-label">今いる場所<select id="replanHere"><option value="">（場所を選ぶ）</option></select></label></div>
+<div class="replan-sub">もう行った場所（外す）</div>
+<div id="replanVisited" class="replan-visited"></div>
+<button id="replanBtn" class="btn btn-primary calc-btn">今から最適な経路を出す</button>
+<p class="place-note">行った場所を外し、今いる場所から残りの場所を回る最適な順序を計算し直します。過ぎてしまった希望時間は無効として扱います。</p>
 </div>
 <div id="importBar" class="import-bar" hidden><label>読み込む日程<select id="importGroup"></select></label><button id="importApply" class="btn btn-small btn-primary">この日程を読み込む</button></div>
 <section class="result-section"><div class="panel-tools"><div class="panel-title">提案旅程 <small id="resultSummary"></small></div></div>
