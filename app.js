@@ -624,7 +624,7 @@ $('#importFile').addEventListener('change', async (e) => {
   sel.innerHTML = '';
   groups.forEach((g, key) => {
     const opt = document.createElement('option');
-    opt.value = key; opt.textContent = g.label + '（' + g.events.length + '件）';
+    opt.value = key; opt.textContent = g.label + '（予定' + g.events.length + '件）';
     sel.appendChild(opt);
   });
   $('#importBar').hidden = false;
