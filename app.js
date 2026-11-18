@@ -192,12 +192,13 @@ async function calculate() {
   for (let i = 0; i < rows.length; i++) {
     const name = rows[i].querySelector('.place-name').value.trim();
     if (!name) { setStatus((i + 1) + '番目の場所名が空です', true); return; }
-    if (i === 0) { places.push({ name, stay: 0, winStart: null, winEnd: null }); continue; }
+    const preset = rows[i].dataset.lat ? { lat: parseFloat(rows[i].dataset.lat), lng: parseFloat(rows[i].dataset.lng) } : null;
+    if (i === 0) { places.push({ name, stay: 0, winStart: null, winEnd: null, ...(preset || {}) }); continue; }
     const stay = Math.max(0, parseInt(rows[i].querySelector('.f-stay').value, 10) || 0);
     let ws = timeToMin(rows[i].querySelector('.f-ws').value);
     let we = timeToMin(rows[i].querySelector('.f-we').value);
     if (ws != null && we != null && we <= ws) we += 1440; // window past midnight
-    places.push({ name, stay, winStart: ws, winEnd: we });
+    places.push({ name, stay, winStart: ws, winEnd: we, ...(preset || {}) });
   }
   if (places.length < 2) { setStatus('場所を2件以上入れてください', true); return; }
   const mode = $('#mode').value;
@@ -208,6 +209,7 @@ async function calculate() {
   try {
     // 1) Geocode
     for (let i = 0; i < places.length; i++) {
+      if (places[i].lat != null && places[i].lng != null) continue; // imported coords
       setStatus('場所を検索中… ' + (i + 1) + '/' + places.length + '：' + places[i].name);
       const g = await geocode(places[i].name);
       if (!g) { setStatus('場所が見つかりませんでした：' + places[i].name + '（市区町村名を足すなど、書き方を変えてみてください）', true); return; }
@@ -256,7 +258,9 @@ async function calculate() {
   }
 }
 
+let lastResult = null;
 function renderResult(places, order, sim, legs, geometry, mode, roundTrip, startMin) {
+  lastResult = { places, order, sim, legs, mode, roundTrip, startMin };
   mapLayer.clearLayers();
   if (geometry && geometry.length > 1) {
     L.polyline(geometry, { color: '#6156c8', weight: 5, opacity: 0.85 }).addTo(mapLayer);
@@ -319,3 +323,147 @@ function renderResult(places, order, sim, legs, geometry, mode, roundTrip, start
 }
 function escapeHtml(s) { return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 $('#calcBtn').addEventListener('click', calculate);
+
+/* ===== 元サイト「Route Notebook」とのJSON互換（読込／書出） =====
+   対応形式: ChatGPT旅程JSON（kind: "route-notebook-itinerary", version 1）と
+   kind無しの全旅行JSON（trips/points/events を持つオブジェクト）。 */
+let pendingImport = null;
+
+function fmtHHMM(mins) {
+  mins = ((Math.round(mins) % 1440) + 1440) % 1440;
+  return String(Math.floor(mins / 60)).padStart(2, '0') + ':' + String(mins % 60).padStart(2, '0');
+}
+function loadPlacesIntoForm(list, firstTime) {
+  placeList.innerHTML = '';
+  list.forEach((it, i) => {
+    addPlaceRow();
+    const row = placeList.children[i];
+    row.querySelector('.place-name').value = it.name;
+    if (it.lat != null && it.lng != null) { row.dataset.lat = it.lat; row.dataset.lng = it.lng; }
+    if (i > 0) {
+      row.querySelector('.f-stay').value = it.stay != null ? it.stay : 60;
+      if (it.winStart) row.querySelector('.f-ws').value = it.winStart;
+      if (it.winEnd) row.querySelector('.f-we').value = it.winEnd;
+    }
+  });
+  renumber();
+  if (firstTime) $('#startTime').value = firstTime;
+  lastResult = null;
+}
+function buildGroups(data) {
+  const pointMap = new Map();
+  (data.points || []).forEach(p => { if (p && p.id != null) pointMap.set(String(p.id), p); });
+  const groups = new Map();
+  (data.events || []).forEach(ev => {
+    if (!ev || ev.pointId == null || !pointMap.has(String(ev.pointId))) return;
+    const key = (ev.plan || '（旅程名なし）') + '|' + (ev.day || '（日付なし）');
+    if (!groups.has(key)) groups.set(key, { label: (ev.plan || '（旅程名なし）') + ' / ' + (ev.day || '（日付なし）'), events: [] });
+    groups.get(key).events.push(ev);
+  });
+  return { pointMap, groups };
+}
+function applyGroup(pointMap, group) {
+  const evs = group.events.slice().sort((a, b) =>
+    (String(a.time || '')).localeCompare(String(b.time || '')) || ((a.order || 0) - (b.order || 0)));
+  const seen = new Set(); const list = [];
+  evs.forEach(ev => {
+    const p = pointMap.get(String(ev.pointId));
+    if (!p || seen.has(String(p.id))) return;
+    seen.add(String(p.id));
+    const t = ev.time && /^\d{1,2}:\d{2}$/.test(ev.time) ? ev.time : null;
+    let stay = 60, ws = t, we = null;
+    if (typeof ev.stayMinutes === 'number' && ev.stayMinutes >= 0) {
+      stay = ev.stayMinutes;
+      if (t) { const end = timeToMin(t) + stay; if (end < 1440) we = fmtHHMM(end); }
+    }
+    list.push({ name: p.name, lat: (typeof p.lat === 'number' ? p.lat : null), lng: (typeof p.lon === 'number' ? p.lon : null), stay, winStart: ws, winEnd: we });
+  });
+  if (list.length < 2) { setStatus('読み込める地点が2件未満でした', true); return; }
+  if (list.length > MAX_PLACES) list.length = MAX_PLACES;
+  loadPlacesIntoForm(list, evs.length && evs[0].time ? evs[0].time : null);
+  setStatus('「' + group.label + '」から ' + list.length + ' 件の場所を読み込みました。条件を直して計算できます');
+}
+$('#importBtn').addEventListener('click', () => $('#importFile').click());
+$('#importFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  if (file.size > 10 * 1024 * 1024) { setStatus('ファイルが10MBを超えています', true); return; }
+  let data;
+  try { data = JSON.parse(await file.text()); }
+  catch (err) { setStatus('JSONとして読み込めませんでした', true); return; }
+  if (Array.isArray(data)) data = { points: data, events: [] };
+  if (!data || (!Array.isArray(data.points) && !Array.isArray(data.events))) {
+    setStatus('Route Notebook形式のJSONではありません（points / events が必要です）', true); return;
+  }
+  const { pointMap, groups } = buildGroups(data);
+  if (!pointMap.size) { setStatus('地点（points）が見つかりませんでした', true); return; }
+  if (!groups.size) {
+    const list = [...pointMap.values()].map(p => ({ name: p.name, lat: (typeof p.lat === 'number' ? p.lat : null), lng: (typeof p.lon === 'number' ? p.lon : null), stay: 60, winStart: null, winEnd: null }));
+    if (list.length > MAX_PLACES) list.length = MAX_PLACES;
+    loadPlacesIntoForm(list, null);
+    setStatus('地点 ' + list.length + ' 件を読み込みました（予定なし）');
+    return;
+  }
+  if (groups.size === 1) { applyGroup(pointMap, [...groups.values()][0]); return; }
+  pendingImport = { pointMap, groups };
+  const sel = $('#importGroup');
+  sel.innerHTML = '';
+  groups.forEach((g, key) => {
+    const opt = document.createElement('option');
+    opt.value = key; opt.textContent = g.label + '（' + g.events.length + '件）';
+    sel.appendChild(opt);
+  });
+  $('#importBar').hidden = false;
+  setStatus('日程が ' + groups.size + ' 件あります。読み込む日程を選んでください');
+});
+$('#importApply').addEventListener('click', () => {
+  if (!pendingImport) return;
+  const g = pendingImport.groups.get($('#importGroup').value);
+  $('#importBar').hidden = true;
+  if (g) applyGroup(pendingImport.pointMap, g);
+  pendingImport = null;
+});
+
+$('#exportBtn').addEventListener('click', async () => {
+  if (!lastResult) {
+    setStatus('書き出し用に、まず旅程を計算します…');
+    await calculate();
+    if (!lastResult) { setStatus('計算できなかったため書き出せませんでした', true); return; }
+  }
+  const { places, order, sim, legs, mode } = lastResult;
+  const now = new Date();
+  const startDate = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+  const tripId = 'route-planner';
+  const totalCost = legs.reduce((a, l) => a + legCostYen(l.km, mode), 0);
+  const modeMap = { driving: 'driving', foot: 'walking', bike: 'bicycling' };
+  const out = {
+    kind: 'route-notebook-itinerary', version: 1,
+    trips: [{ id: tripId, title: 'Route Planner 旅程', startDate, endDate: startDate, budget: totalCost, note: 'Route Plannerで最適化した旅程' }],
+    points: order.map((pi, k) => ({ id: 'rp_p' + (k + 1), tripId, name: places[pi].name, lat: Math.round(places[pi].lat * 1e6) / 1e6, lon: Math.round(places[pi].lng * 1e6) / 1e6 })),
+    events: sim.stops.map((s, k) => ({
+      id: 'rp_ev_' + String(k + 1).padStart(4, '0'), tripId, plan: '最適化旅程', day: startDate,
+      time: fmtHHMM(s.arr), action: places[s.idx].name + 'を訪問', pointId: 'rp_p' + (k + 1),
+      order: k, category: '観光', stayMinutes: places[s.idx].stay,
+      travelMode: k === 0 ? 'unspecified' : modeMap[mode],
+      cost: k === 0 ? 0 : legCostYen(legs[k - 1].km, mode),
+      confidence: '計画', source: 'Route Planner（OSRM経路計算による提案）'
+    }))
+  };
+  if (lastResult.roundTrip) {
+    out.events.push({
+      id: 'rp_ev_' + String(out.events.length + 1).padStart(4, '0'), tripId, plan: '最適化旅程', day: startDate,
+      time: fmtHHMM(sim.endTime), action: places[0].name + 'へ帰着', pointId: 'rp_p1',
+      order: out.events.length, category: '交通', stayMinutes: 0,
+      travelMode: modeMap[mode], cost: legCostYen(legs[legs.length - 1].km, mode),
+      confidence: '計画', source: 'Route Planner（OSRM経路計算による提案）'
+    });
+  }
+  const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'route-notebook-itinerary.json';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  setStatus('ChatGPT旅程JSONを書き出しました。元サイトの「JSON読込」から取り込めます');
+});

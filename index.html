@@ -6,7 +6,7 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="styles.css">
 </head><body><div class="app">
-<header class="masthead"><div class="brand"><span class="brand-mark">R</span><div><div class="eyebrow">MAPS · PLANS · EFFICIENCY</div><h1>Route Planner <small>旅程プランナー</small></h1></div></div><div class="mast-actions"><span class="save-status">希望時間帯と滞在時間から最高効率の旅程を提案</span></div></header>
+<header class="masthead"><div class="brand"><span class="brand-mark">R</span><div><div class="eyebrow">MAPS · PLANS · EFFICIENCY</div><h1>Route Planner <small>旅程プランナー</small></h1></div></div><div class="mast-actions"><span class="save-status">元サイト「Route Notebook」とJSON互換</span><input type="file" id="importFile" accept=".json,application/json" hidden><button id="importBtn" class="btn">JSON読込</button><button id="exportBtn" class="btn btn-outline">JSON書き出し</button></div></header>
 <div class="workspace"><aside class="sidebar">
 <div class="sidebar-intro">
 <h2>旅程の条件</h2>
@@ -26,6 +26,7 @@
 <div id="placeList" class="scroll-list"></div>
 <div class="calc-row"><button id="calcBtn" class="btn btn-primary calc-btn">最高効率の旅程を計算</button></div>
 <div id="status" class="status" role="status"></div>
+<div id="importBar" class="import-bar" hidden><label>読み込む日程<select id="importGroup"></select></label><button id="importApply" class="btn btn-small btn-primary">この日程を読み込む</button></div>
 <section class="result-section"><div class="panel-tools"><div class="panel-title">提案旅程 <small id="resultSummary"></small></div></div>
 <div id="resultList" class="scroll-list result-list"></div></section>
 </aside>

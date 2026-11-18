@@ -48,6 +48,10 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid 
 .calc-row{padding:6px 14px 4px}
 .calc-btn{width:100%;padding:13px;font-size:14px}
 .calc-btn:disabled{opacity:.55;cursor:wait}
+.mast-actions{display:flex;gap:9px;align-items:center}
+.import-bar{display:flex;gap:8px;align-items:flex-end;padding:8px 18px;background:#f0eefc;border-bottom:1px solid #e5e7ef}
+.import-bar label{font-size:10px;color:#7c8291;font-weight:750;flex:1}
+.import-bar select{display:block;width:100%;margin-top:5px;border:1px solid #e2e5ee;border-radius:9px;background:#fff;padding:8px 6px;font-size:12px;color:#313d54}
 .status{padding:8px 18px;font-size:12px;color:#5544b1;min-height:20px}
 .status.error{color:#b53747;font-weight:700}
 .result-section{border-top:1px solid #eceef3;margin-top:6px;padding-bottom:16px}
