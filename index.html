@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ja"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Route Planner — 場所・滞在時間・希望時間帯から最高効率の旅程を自動で提案するツール。">
+<title>Route Planner — 旅程プランナー</title><link rel="icon" href="data:,">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="styles.css">
+</head><body><div class="app">
+<header class="masthead"><div class="brand"><span class="brand-mark">R</span><div><div class="eyebrow">MAPS · PLANS · EFFICIENCY</div><h1>Route Planner <small>旅程プランナー</small></h1></div></div><div class="mast-actions"><span class="save-status">希望時間帯と滞在時間から最高効率の旅程を提案</span></div></header>
+<div class="workspace"><aside class="sidebar">
+<div class="sidebar-intro">
+<h2>旅程の条件</h2>
+<p>場所ごとに「何分いたいか」と「この時間帯にいたい」を入れると、希望のズレが最小で、移動＋待ち時間も最短になる回り方を提案します。</p>
+<div class="filters">
+<label>出発時刻<input id="startTime" type="time" value="09:00"></label>
+<label>移動手段<select id="mode"><option value="driving">車</option><option value="foot">徒歩</option><option value="bike">自転車</option></select></label>
+</div>
+<div class="filters" id="fuelRow">
+<label>燃費 (km/L)<input id="nenpi" type="number" value="12" min="1" step="0.1"></label>
+<label>ガソリン単価 (円/L)<input id="tanka" type="number" value="170" min="0" step="1"></label>
+</div>
+<label class="check-row"><input id="roundTrip" type="checkbox"> 最後に出発地に戻る</label>
+<div class="metrics"><div><b id="pointCount">—</b><span>地点</span></div><div><b id="totalDist">—</b><span>総距離</span></div><div><b id="totalCost">—</b><span>合計料金</span></div></div>
+</div>
+<div class="panel-tools"><div class="panel-title">場所 <small>先頭が出発地</small></div><button id="addPlaceBtn" class="btn btn-small">＋ 場所</button></div>
+<div id="placeList" class="scroll-list"></div>
+<div class="calc-row"><button id="calcBtn" class="btn btn-primary calc-btn">最高効率の旅程を計算</button></div>
+<div id="status" class="status" role="status"></div>
+<section class="result-section"><div class="panel-tools"><div class="panel-title">提案旅程 <small id="resultSummary"></small></div></div>
+<div id="resultList" class="scroll-list result-list"></div></section>
+</aside>
+<main class="map-wrap"><div id="map"></div></main>
+</div></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="app.js"></script>
+</body></html>
