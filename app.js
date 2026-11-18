@@ -666,13 +666,20 @@ $('#exportBtn').addEventListener('click', async () => {
   };
   let stopsN = [], returnStop = null;
   if (R.kind === 'transit') {
+    let seenFirst = false;
     R.stopsRaw.forEach(s => {
-      const dt = jstDateTime(s.arrEpoch || s.depEpoch);
-      const item = { idx: s.idx, date: dt.date, time: dt.time };
-      if (s.isReturn) returnStop = item; else stopsN.push(item);
+      if (s.isReturn) { const dt = jstDateTime(s.arrEpoch); returnStop = { idx: s.idx, date: dt.date, time: dt.time }; return; }
+      // イベント時刻は「実際に滞在を始める時刻」（到着後の待ちを除く）
+      const visitEpoch = !seenFirst ? (s.arrEpoch || s.depEpoch) : (s.depEpoch - places[s.idx].stay * 60);
+      seenFirst = true;
+      const dt = jstDateTime(visitEpoch);
+      stopsN.push({ idx: s.idx, date: dt.date, time: dt.time });
     });
   } else {
-    stopsN = R.sim.stops.map(s => ({ idx: s.idx, date: isoOfDayOff(Math.floor(s.arr / 1440)), time: fmtHHMM(s.arr) }));
+    stopsN = R.sim.stops.map((s, k) => {
+      const visit = k === 0 ? s.arr : s.dep - places[s.idx].stay; // 実際の滞在開始（待ちを除く）
+      return { idx: s.idx, date: isoOfDayOff(Math.floor(visit / 1440)), time: fmtHHMM(visit) };
+    });
     if (R.roundTrip) returnStop = { idx: 0, date: isoOfDayOff(Math.floor(R.sim.endTime / 1440)), time: fmtHHMM(R.sim.endTime) };
   }
   const startDate = stopsN.length ? stopsN[0].date : ($('#tripDate').value || '');
