@@ -644,32 +644,63 @@ $('#exportBtn').addEventListener('click', async () => {
     await calculate();
     if (!lastResult) { setStatus('計算できなかったため書き出せませんでした', true); return; }
   }
-  const { places, order, sim, legs, mode } = lastResult;
-  const now = new Date();
-  const startDate = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+  const R = lastResult;
+  const places = R.places, order = R.order, legs = R.legs;
+  const mode = R.kind === 'transit' ? 'transit' : R.mode;
   const tripId = 'route-planner';
-  const totalCost = legs.reduce((a, l) => a + legCostYen(l.km, mode, l), 0);
   const modeMap = { driving: 'driving', foot: 'walking', bike: 'bicycling', transit: 'transit' };
   const srcText = mode === 'transit' ? 'Route Planner（Googleマップ実ダイヤによる提案）' : 'Route Planner（OSRM経路計算による提案）';
+  const legCost = (k) => {
+    const leg = legs[k];
+    if (!leg) return 0;
+    return mode === 'transit' ? (leg.fare || 0) : legCostYen(leg.km, mode, leg);
+  };
+  const totalCost = legs.reduce((a, l, k) => a + legCost(k), 0);
+  // 停車を「日付＋HH:MM」に正規化する（複数日にまたがる旅程も正しい日付で書き出す）
+  const isoOfDayOff = (off) => {
+    const trip = $('#tripDate').value;
+    if (!trip) return '';
+    const [Y, M, D] = trip.split('-').map(Number);
+    const d = new Date(Date.UTC(Y, M - 1, D + off));
+    return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate());
+  };
+  let stopsN = [], returnStop = null;
+  if (R.kind === 'transit') {
+    R.stopsRaw.forEach(s => {
+      const dt = jstDateTime(s.arrEpoch || s.depEpoch);
+      const item = { idx: s.idx, date: dt.date, time: dt.time };
+      if (s.isReturn) returnStop = item; else stopsN.push(item);
+    });
+  } else {
+    stopsN = R.sim.stops.map(s => ({ idx: s.idx, date: isoOfDayOff(Math.floor(s.arr / 1440)), time: fmtHHMM(s.arr) }));
+    if (R.roundTrip) returnStop = { idx: 0, date: isoOfDayOff(Math.floor(R.sim.endTime / 1440)), time: fmtHHMM(R.sim.endTime) };
+  }
+  const startDate = stopsN.length ? stopsN[0].date : ($('#tripDate').value || '');
+  const endDate = returnStop ? returnStop.date : (stopsN.length ? stopsN[stopsN.length - 1].date : startDate);
   const out = {
     kind: 'route-notebook-itinerary', version: 1,
-    trips: [{ id: tripId, title: 'Route Planner 旅程', startDate, endDate: startDate, budget: totalCost, note: 'Route Plannerで最適化した旅程' }],
-    points: order.map((pi, k) => ({ id: 'rp_p' + (k + 1), tripId, name: places[pi].name, lat: Math.round(places[pi].lat * 1e6) / 1e6, lon: Math.round(places[pi].lng * 1e6) / 1e6 })),
-    events: sim.stops.map((s, k) => ({
-      id: 'rp_ev_' + String(k + 1).padStart(4, '0'), tripId, plan: '最適化旅程', day: startDate,
-      time: fmtHHMM(s.arr), action: places[s.idx].name + 'を訪問', pointId: 'rp_p' + (k + 1),
-      order: k, category: '観光', stayMinutes: places[s.idx].stay,
+    trips: [{ id: tripId, title: 'Route Planner 旅程', startDate, endDate, budget: totalCost, note: 'Route Plannerで最適化した旅程' }],
+    points: order.map((pi, k) => {
+      const pt = { id: 'rp_p' + (k + 1), tripId, name: places[pi].name, lat: Math.round(places[pi].lat * 1e6) / 1e6, lon: Math.round(places[pi].lng * 1e6) / 1e6 };
+      if (places[pi].cat) pt.category = places[pi].cat;
+      if (places[pi].address) pt.address = places[pi].address;
+      return pt;
+    }),
+    events: stopsN.map((s, k) => ({
+      id: 'rp_ev_' + String(k + 1).padStart(4, '0'), tripId, plan: '最適化旅程', day: s.date,
+      time: s.time, action: places[s.idx].name + 'を訪問', pointId: 'rp_p' + (k + 1),
+      order: k, category: places[s.idx].cat || '観光', stayMinutes: places[s.idx].stay,
       travelMode: k === 0 ? 'unspecified' : modeMap[mode],
-      cost: k === 0 ? 0 : legCostYen(legs[k - 1].km, mode, legs[k - 1]),
+      cost: k === 0 ? 0 : legCost(k - 1),
       confidence: '計画', source: srcText
     }))
   };
-  if (lastResult.roundTrip) {
+  if (returnStop) {
     out.events.push({
-      id: 'rp_ev_' + String(out.events.length + 1).padStart(4, '0'), tripId, plan: '最適化旅程', day: startDate,
-      time: fmtHHMM(sim.endTime), action: places[0].name + 'へ帰着', pointId: 'rp_p1',
+      id: 'rp_ev_' + String(out.events.length + 1).padStart(4, '0'), tripId, plan: '最適化旅程', day: returnStop.date,
+      time: returnStop.time, action: places[0].name + 'へ帰着', pointId: 'rp_p1',
       order: out.events.length, category: '交通', stayMinutes: 0,
-      travelMode: modeMap[mode], cost: legCostYen(legs[legs.length - 1].km, mode, legs[legs.length - 1]),
+      travelMode: modeMap[mode], cost: legCost(legs.length - 1),
       confidence: '計画', source: srcText
     });
   }
